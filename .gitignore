@@ -1,0 +1,72 @@
+################################################
+# OS Files
+################################################
+.DS_Store
+.DS_Store?
+Thumbs.db
+desktop.ini
+
+################################################
+# Python / FastAPI Backend
+################################################
+# Byte-compiled / optimized / DLL files
+**/__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Python distribution
+build/
+dist/
+*.egg-info/
+
+# Testing / Coverage
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage/
+htmlcov/
+
+# Logs / Databases
+*.log
+*.sqlite3
+*.db
+
+################################################
+# Environment Variables (IMPORTANT)
+################################################
+.env
+.env.*
+backend/.env
+frontend/.env
+
+################################################
+# Node / React / Vite Frontend
+################################################
+node_modules/
+dist/
+build/
+.vite/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+################################################
+# IDE / Editor
+################################################
+.vscode/
+.idea/
+*.swp
+*.swo
+
+################################################
+# Misc
+################################################
+*.tmp
+*.bak
