@@ -1,12 +1,9 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, UploadFile, File
 from fastapi.responses import StreamingResponse
 import asyncio
-import websockets
-import json
-import requests
+import httpx
 from typing import Set
-
-
+import urllib.parse
 import os
 from dotenv import load_dotenv
 
@@ -15,10 +12,11 @@ load_dotenv()
 PRINTER_IP = os.getenv("FDM_PRINTER_IP")
 if not PRINTER_IP:
     raise ValueError("FDM_PRINTER_IP not set in .env file")
-
+PRINTER_IP = "10.106.99.97"
 BASE_URL = f"http://{PRINTER_IP}:7125"
-MOONRAKER_WS = f"ws://{PRINTER_IP}:7125/websocket"
 PRINTER_STREAM_URL = f"{BASE_URL}/webcam/?action=stream"
+
+POLL_INTERVAL = 5 
 
 router = APIRouter()
 
@@ -27,9 +25,9 @@ latest_status = {}
 moonraker_connected = False
 
 
-# ====================================
+# =========================
 # STATE MAPPING
-# =====================================
+# =========================
 def map_state(raw_state: str) -> str:
     mapping = {
         "printing": "Printing",
@@ -38,14 +36,15 @@ def map_state(raw_state: str) -> str:
         "complete": "Completed",
         "standby": "Idle",
         "idle": "Idle",
+        "ready": "Idle",
         "error": "Error"
     }
     return mapping.get(raw_state, "Idle")
 
 
-# =====================================
-# BROADCAST TO FRONTEND
-# =====================================
+# =========================
+# BROADCAST
+# =========================
 async def broadcast(data):
     dead = []
     for client in connected_clients:
@@ -57,9 +56,9 @@ async def broadcast(data):
         connected_clients.remove(d)
 
 
-# =====================================
-# FRONTEND WEBSOCKET
-# =====================================
+# =========================
+# WEBSOCKET
+# =========================
 @router.websocket("/ws/printer")
 async def printer_ws(websocket: WebSocket):
     await websocket.accept()
@@ -75,122 +74,193 @@ async def printer_ws(websocket: WebSocket):
         connected_clients.remove(websocket)
 
 
-# =====================================
-# MOONRAKER LISTENER
-# =====================================
-async def listen_to_printer():
+# =========================
+# POLLING LOOP
+# =========================
+async def poll_printer():
     global latest_status, moonraker_connected
 
-    while True:
-        try:
-            async with websockets.connect(MOONRAKER_WS) as ws:
-                moonraker_connected = True
-                print("Moonraker Connected")
+    await asyncio.sleep(5)
 
-                subscribe = {
-                    "jsonrpc": "2.0",
-                    "method": "printer.objects.subscribe",
-                    "params": {
-                        "objects": {
-                            "extruder": None,
-                            "heater_bed": None,
-                            "toolhead": None,
-                            "print_stats": None,
-                            "virtual_sdcard": None,
-                            "motion_report": None,
-                            "gcode_move": None
-                        }
-                    },
-                    "id": 1
+    async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
+        while True:
+            try:
+                response = await client.get(
+                    f"{BASE_URL}/printer/objects/query",
+                    params={
+                        "extruder": "",
+                        "heater_bed": "",
+                        "toolhead": "",
+                        "print_stats": "",
+                        "virtual_sdcard": "",
+                        "gcode_move": "",
+                        "motion_report": ""
+                    }
+                )
+
+                status = response.json()["result"]["status"]
+
+                raw_state = status.get("print_stats", {}).get("state", "idle")
+                ui_state = map_state(raw_state)
+
+                moonraker_connected = True
+
+                latest_status = {
+                    "moonraker_connected": True,
+                    "ui_state": ui_state,
+                    "raw_status": status
                 }
 
-                await ws.send(json.dumps(subscribe))
+                print(f"✅ Stable | {ui_state}")
 
-                while True:
-                    msg = await ws.recv()
-                    data = json.loads(msg)
-                    status = data.get("params", {}).get("status")
+                await broadcast(latest_status)
 
-                    if status:
-                        raw_state = status.get("print_stats", {}).get("state", "idle")
-                        ui_state = map_state(raw_state)
+            except Exception:
+                moonraker_connected = False
+                print("⚠️ Network glitch")
 
-                        latest_status = {
-                            "moonraker_connected": moonraker_connected,
-                            "ui_state": ui_state,
-                            "raw_status": status
-                        }
+                await broadcast({
+                    "moonraker_connected": False,
+                    "ui_state": "Disconnected"
+                })
 
-                        await broadcast(latest_status)
-
-        except Exception as e:
-            moonraker_connected = False
-            print("Moonraker Disconnected", e)
-
-            await broadcast({
-                "moonraker_connected": False,
-                "ui_state": "Disconnected"
-            })
-
-            await asyncio.sleep(5)
+            await asyncio.sleep(POLL_INTERVAL)
 
 
 @router.on_event("startup")
 async def startup_event():
-    asyncio.create_task(listen_to_printer())
+    asyncio.create_task(poll_printer())
 
 
-# =====================================
+# =========================
+# FILE LIST
+# =========================
+@router.get("/files")
+async def list_files():
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
+            response = await client.get(f"{BASE_URL}/server/files/list")
+
+        data = response.json()
+
+        result = data.get("result", [])
+
+        # Case 1: result is dict and has "files"
+        if isinstance(result, dict):
+            files_data = result.get("files", [])
+        # Case 2: result itself is list
+        elif isinstance(result, list):
+            files_data = result
+        else:
+            files_data = []
+
+        files = []
+        for item in files_data:
+            path = item.get("path", "")
+            if path.endswith(".gcode"):
+                # Remove "gcodes/" prefix for clean display
+                filename = path.split("/")[-1]
+                files.append(filename)
+
+        return {"files": files}
+
+    except Exception as e:
+        print("File list error:", e)
+        return {"files": []}
+
+# =========================
+# UPLOAD
+# =========================
+@router.post("/upload")
+async def upload_gcode(file: UploadFile = File(...)):
+    content = await file.read()
+
+    async with httpx.AsyncClient(timeout=httpx.Timeout(120.0)) as client:
+        response = await client.post(
+            f"{BASE_URL}/server/files/upload",
+            files={"file": (file.filename, content)},
+            data={"root": "gcodes"},
+        )
+
+    print("Upload response:", response.text)
+
+    return {
+        "status": response.is_success,
+        "filename": file.filename
+    }
+
+
+# =========================
+# START PRINT
+# =========================
+@router.post("/start")
+async def start_print(filename: str):
+    try:
+        safe_filename = urllib.parse.unquote(filename)
+
+        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0)) as client:
+            response = await client.post(
+                f"{BASE_URL}/printer/print/start",
+                json={"filename": safe_filename}
+            )
+
+        print("Start response:", response.text)
+
+        return {
+            "status": response.is_success,
+            "response": response.text
+        }
+
+    except Exception as e:
+        print("Start error:", e)
+        return {"status": False, "error": str(e)}
+
+
+# =========================
+# STOP PRINT
+# =========================
+@router.post("/stop")
+async def stop_print():
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            await client.post(
+                f"{BASE_URL}/printer/print/cancel"
+            )
+        return {"status": True}
+    except Exception as e:
+        print("Stop error:", e)
+        return {"status": False}
+
+# =========================
+# PAUSE PRINT
+# =========================
+@router.post("/pause")
+async def pause_print():
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            await client.post(
+                f"{BASE_URL}/printer/gcode/script",
+                json={"script": "PAUSE"}
+            )
+
+        return {"status": True}
+
+    except Exception as e:
+        print("Pause error:", e)
+        return {"status": False}
+
+# =========================
 # VIDEO STREAM
-# =====================================
+# =========================
 @router.get("/video_feed")
-def video_feed():
-    def generate():
-        with requests.get(PRINTER_STREAM_URL, stream=True) as r:
-            for chunk in r.iter_content(chunk_size=1024):
-                if chunk:
+async def video_feed():
+    async def generate():
+        async with httpx.AsyncClient(timeout=None) as client:
+            async with client.stream("GET", PRINTER_STREAM_URL) as r:
+                async for chunk in r.aiter_bytes():
                     yield chunk
 
     return StreamingResponse(
         generate(),
         media_type="multipart/x-mixed-replace; boundary=frame"
     )
-
-
-# =====================================
-# FILE UPLOAD
-# =====================================
-@router.post("/upload")
-async def upload_gcode(file: UploadFile = File(...)):
-    files = {
-        "file": (file.filename, await file.read(), "application/octet-stream")
-    }
-
-    response = requests.post(
-        f"{BASE_URL}/server/files/upload",
-        files=files,
-        data={"root": "gcodes"},
-    )
-
-    return {"status": response.ok}
-
-
-# =====================================
-# START PRINT
-# =====================================
-@router.post("/start/{filename}")
-async def start_print(filename: str):
-    response = requests.post(
-        f"{BASE_URL}/printer/print/start",
-        json={"filename": filename}
-    )
-    return {"status": response.ok}
-
-
-# =====================================
-# STOP PRINT
-# =====================================
-@router.post("/stop")
-async def stop_print():
-    response = requests.post(f"{BASE_URL}/printer/print/cancel")
-    return {"status": response.ok}
