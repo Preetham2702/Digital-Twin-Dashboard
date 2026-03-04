@@ -15,7 +15,7 @@ load_dotenv()
 PRINTER_IP = os.getenv("FDM_PRINTER_IP")
 if not PRINTER_IP:
     raise ValueError("FDM_PRINTER_IP not set in .env file")
-    
+
 BASE_URL = f"http://{PRINTER_IP}:7125"
 MOONRAKER_WS = f"ws://{PRINTER_IP}:7125/websocket"
 PRINTER_STREAM_URL = f"{BASE_URL}/webcam/?action=stream"
@@ -27,7 +27,7 @@ latest_status = {}
 moonraker_connected = False
 
 
-# =====================================
+# ====================================
 # STATE MAPPING
 # =====================================
 def map_state(raw_state: str) -> str:
