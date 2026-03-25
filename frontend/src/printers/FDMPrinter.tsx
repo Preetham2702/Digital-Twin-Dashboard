@@ -11,7 +11,7 @@ import {
   ResponsiveContainer
 } from "recharts"
 
-export default function FDM() {
+export default function FDM({ onConnectionChange }: { onConnectionChange?: (v: boolean) => void }) {
 
   const [connected, setConnected] = useState(false)
 
@@ -29,20 +29,18 @@ export default function FDM() {
 
   const [uploadMessage, setUploadMessage] = useState("")
   const [actionMessage, setActionMessage] = useState("")
-  const [connectionNotice, setConnectionNotice] = useState("")
 
-  // ✅ NEW STATES
   const [printerFiles, setPrinterFiles] = useState<string[]>([])
   const [selectedFile, setSelectedFile] = useState("")
 
-  const startTimeRef = useRef<number | null>(null)
+  const socketRef = useRef<WebSocket | null>(null)
 
   const [motionData, setMotionData] = useState<
     { time: number; feed: number; velocity: number }[]
   >([])
 
   // =============================
-  // FETCH EXISTING FILES
+  // FETCH FILES
   // =============================
   const fetchFiles = async () => {
     try {
@@ -51,111 +49,111 @@ export default function FDM() {
         const data = await res.json()
         setPrinterFiles(data)
       }
-    } catch (err) {
+    } catch {
       console.error("Failed to fetch printer files")
     }
   }
-
   useEffect(() => {
-    fetchFiles()
-  }, [])
-
-  // =============================
-  // WEBSOCKET
-  // =============================
-  useEffect(() => {
-    const socket = new WebSocket("ws://localhost:8000/ws/printer")
-    let interval: any
-    const previousConnectionStateRef = { current: false }
+    let isMounted = true
+    let reconnectTimeout: any = null
   
-    socket.onmessage = (event) => {
-      const data = JSON.parse(event.data)
-      const isConnected = data.moonraker_connected ?? false
+    const connect = () => {
+      if (!isMounted) return
   
-      setConnected(isConnected)
-      setStatus(data.ui_state ?? "Idle")
+      const socket = new WebSocket("ws://localhost:8000/ws/printer")
+      socketRef.current = socket
   
-      // ✅ Show "Connected" only once
-      if (isConnected && !previousConnectionStateRef.current) {
-        setConnectionNotice("connected")
-        setTimeout(() => setConnectionNotice(""), 2000)
-
-        if (interval) {
-          clearInterval(interval)
-          interval = null
-        }
+      socket.onopen = () => {
+        console.log("FDM connected")
       }
-
-      // ✅ Show disconnect repeatedly
-      if (!isConnected && previousConnectionStateRef.current) {
-        setConnectionNotice("disconnected")
-
-        if (!interval) {
-          interval = setInterval(() => {
-            setConnectionNotice("disconnected")
-            setTimeout(() => setConnectionNotice(""), 2000)
-          }, 4000)
-        }
-      }
-
-      previousConnectionStateRef.current = isConnected
   
-      const s = data.raw_status
-      if (!s) return
+      socket.onmessage = (event) => {
+        if (!isMounted) return
   
-      setNozzleTemp(s.extruder?.temperature ?? 0)
-      setNozzleTarget(s.extruder?.target ?? 0)
-      setBedTemp(s.heater_bed?.temperature ?? 0)
-      setBedTarget(s.heater_bed?.target ?? 0)
+        try {
+          const data = JSON.parse(event.data)
+          const isConnected = data.moonraker_connected ?? false
   
-      setX(s.toolhead?.position?.[0] ?? 0)
-      setY(s.toolhead?.position?.[1] ?? 0)
-      setZ(s.toolhead?.position?.[2] ?? 0)
+          setConnected(isConnected)
   
-      setProgress((s.virtual_sdcard?.progress ?? 0) * 100)
-  
-      setMotionData(prev => {
-        const nowSeconds = Math.floor(Date.now() / 1000)
-      
-        // Set start time only once
-        if (!startTimeRef.current) {
-          startTimeRef.current = nowSeconds
-        }
-      
-        const elapsed = nowSeconds - startTimeRef.current
-      
-        const newData = [
-          ...prev,
-          {
-            time: elapsed,
-            feed: s.gcode_move?.speed ?? 0,
-            velocity: s.motion_report?.live_velocity ?? 0
+          if (typeof onConnectionChange === "function") {
+            onConnectionChange(isConnected)
           }
-        ]
-      
-        if (newData.length > 40) newData.shift()
-        return newData
-      })
+  
+          setStatus(data.ui_state ?? "Idle")
+  
+          const s = data.raw_status
+          if (!s) return
+  
+          setNozzleTemp(s.extruder?.temperature ?? 0)
+          setNozzleTarget(s.extruder?.target ?? 0)
+          setBedTemp(s.heater_bed?.temperature ?? 0)
+          setBedTarget(s.heater_bed?.target ?? 0)
+  
+          setX(s.toolhead?.position?.[0] ?? 0)
+          setY(s.toolhead?.position?.[1] ?? 0)
+          setZ(s.toolhead?.position?.[2] ?? 0)
+  
+          setProgress((s.virtual_sdcard?.progress ?? 0) * 100)
+
+          setMotionData(prev => {
+            const newData = [
+              ...prev,
+              {
+                time: prev.length,
+                feed: s.gcode_move?.speed ?? 0,
+                velocity: s.motion_report?.live_velocity ?? 0
+              }
+            ]
+            if (newData.length > 40) newData.shift()
+            return newData
+          })
+  
+        } catch (err) {
+          console.error("WS error:", err)
+        }
+      }
+  
+      socket.onclose = () => {
+        if (!isMounted) return
+  
+        console.log("FDM disconnected")
+  
+        setConnected(false)
+  
+        if (typeof onConnectionChange === "function") {
+          onConnectionChange(false)
+        }
+  
+        // 🔥 AUTO RECONNECT
+        reconnectTimeout = setTimeout(() => {
+          connect()
+        }, 2000)
+      }
     }
   
-    socket.onclose = () => {
-      setConnected(false)
-      setConnectionNotice("disconnected")
-    }
+    connect()
   
     return () => {
-      socket.close()
-      if (interval) clearInterval(interval)
+      isMounted = false
+  
+      if (socketRef.current) {
+        socketRef.current.close()
+      }
+  
+      if (reconnectTimeout) {
+        clearTimeout(reconnectTimeout)
+      }
     }
+  
   }, [])
-
   // =============================
-  // ACTIONS
+  // ACTIONS (UNCHANGED)
   // =============================
-  const handleUpload = async (e: any) => {
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!connected) return
 
-    const file = e.target.files[0]
+    const file = e.target.files?.[0]
     if (!file) return
 
     const formData = new FormData()
@@ -169,16 +167,13 @@ export default function FDM() {
     if (res.ok) {
       setUploadMessage("Upload successful ✓")
       setTimeout(() => setUploadMessage(""), 3000)
-      fetchFiles() // ✅ refresh file list after upload
+      fetchFiles()
     }
   }
 
   const handleStart = async () => {
     if (!connected) return
-    if (!selectedFile) {
-      alert("Please select a file")
-      return
-    }
+    if (!selectedFile) return alert("Please select a file")
     if (!window.confirm("Start print?")) return
 
     const res = await fetch(`http://localhost:8000/start/${selectedFile}`, {
@@ -222,20 +217,9 @@ export default function FDM() {
   return (
     <div className="flex flex-1 overflow-hidden relative">
 
-      {/* 🔹 Connection Notice */}
-      {connectionNotice && (
-        <div className="absolute top-6 right-6 bg-slate-800 px-4 py-2 rounded-md shadow-lg text-sm transition-all duration-300">
-          {connectionNotice === "connected" ? (
-            <span className="text-green-400">✅ Moonraker Connected</span>
-          ) : (
-            <span className="text-red-500">❌ Moonraker Not Connected</span>
-          )}
-        </div>
-      )}
-      {/* 🔴 Persistent Disconnect Banner */}
       {!connected && (
-        <div className="absolute top-0 left-0 w-full text-white text-center py-2 font-semibold z-50">
-          ⚠️ Moonraker Disconnected
+        <div className="absolute top-0 left-0 w-full text-white text-center py-1 font-semibold z-200">
+          ⚠️ FDM Disconnected
         </div>
       )}
 
@@ -358,27 +342,43 @@ export default function FDM() {
         </div>
 
         {/* ROW 3 - MOTION GRAPH */}
-        <div className="bg-slate-800 p-6 rounded border border-slate-700 flex-1">
-          <h3 className="mb-6 text-xl md:text-2xl font-semibold text-slate-200">
+        <div className="bg-slate-800 p-4 rounded h-[300px]">
+          <h3 className="text-lg font-semibold mb-3 text-slate-200">
             Motion Analysis (Feed vs Velocity)
           </h3>
 
-          <ResponsiveContainer width="100%" height="90%">
+          <ResponsiveContainer width="100%" height="85%">
             <LineChart data={motionData}>
               <CartesianGrid stroke="#334155" strokeDasharray="3 3" />
+
               <XAxis
                 dataKey="time"
                 stroke="#94a3b8"
                 label={{ value: "Time (s)", position: "insideBottomRight", offset: -5 }}
               />
+
               <YAxis stroke="#94a3b8" />
+
               <Tooltip />
-              <Line type="monotone" dataKey="feed" stroke="#a855f7" dot={false} strokeWidth={2} />
-              <Line type="monotone" dataKey="velocity" stroke="#22c55e" dot={false} strokeWidth={2} />
+
+              <Line
+                type="monotone"
+                dataKey="feed"
+                stroke="#a855f7"
+                dot={false}
+                strokeWidth={2}
+              />
+
+              <Line
+                type="monotone"
+                dataKey="velocity"
+                stroke="#22c55e"
+                dot={false}
+                strokeWidth={2}
+              />
             </LineChart>
           </ResponsiveContainer>
         </div>
-
       </div>
     </div>
   )

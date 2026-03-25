@@ -45,11 +45,13 @@ def map_state(raw_state: str) -> str:
 # =========================
 async def broadcast(data):
     dead = []
-    for client in connected_clients:
+
+    for ws in connected_clients:
         try:
-            await client.send_json(data)
+            await ws.send_json(data)
         except:
-            dead.append(client)
+            dead.append(ws)
+
     for d in dead:
         connected_clients.remove(d)
 
@@ -62,15 +64,29 @@ async def printer_ws(websocket: WebSocket):
     await websocket.accept()
     connected_clients.add(websocket)
 
-    if latest_status:
-        await websocket.send_json(latest_status)
+    print("✅ FDM connected")
 
     try:
-        while True:
-            await websocket.receive_text()
-    except WebSocketDisconnect:
-        connected_clients.remove(websocket)
+        # optional initial send
+        if latest_status:
+            try:
+                await websocket.send_json(latest_status)
+            except:
+                pass
 
+        while True:
+            try:
+                await websocket.receive_text()
+            except WebSocketDisconnect:
+                break   
+
+    except Exception as e:
+        print("WS error:", e)
+
+    finally:
+        print("❌ FDM client disconnected")
+        if websocket in connected_clients:
+            connected_clients.remove(websocket)
 
 # =========================
 # POLLING LOOP
