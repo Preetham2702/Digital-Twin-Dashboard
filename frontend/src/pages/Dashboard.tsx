@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react"
 import FDM from "../printers/FDMPrinter"
 import Resin from "../printers/ResinPrinter"
+import PocketNC from "../printers/PocketNC"
 
 
 export default function Dashboard() {
@@ -13,6 +14,7 @@ export default function Dashboard() {
   // ✅ CONNECTION STATES
   const [fdmConnected, setFdmConnected] = useState<boolean | null>(null)
   const [resinConnected, setResinConnected] = useState<boolean | null>(null)
+  const [pocketConnected, setPocketConnected] = useState<boolean | null>(null)
   useEffect(() => {
     localStorage.setItem("machine", selectedMachine)
   }, [selectedMachine])
@@ -82,6 +84,7 @@ export default function Dashboard() {
 
           <Connection label="FDM" value={fdmConnected} />
           <Connection label="Resin" value={resinConnected} />
+          <Connection label="PocketNC" value={pocketConnected} />
 
         </div>
 
@@ -97,7 +100,9 @@ export default function Dashboard() {
         <Resin onConnectionChange={setResinConnected} />
       </div>
 
-
+      <div className={selectedMachine === "PocketNC" ? "block" : "hidden"}>
+        <PocketNC onConnectionChange={setPocketConnected} />
+      </div>
 
     </div>
   )
