@@ -1,10 +1,9 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-
+import asyncio
 from Printers.FDM_Printer import router as fdm_router
-# from Printers.Pocket_NC import router as cnc_router
+from Printers.Pocket_NC import router as cnc_router
 from Printers.resin_Printer import router as resin_router
-from Printers.resin_Printer import run_print
 app = FastAPI()
 
 app.add_middleware(
@@ -16,10 +15,6 @@ app.add_middleware(
 )
 
 app.include_router(fdm_router)
-#app.include_router(cnc_router)
+app.include_router(cnc_router)
 app.include_router(resin_router)
 
-@app.on_event("startup")
-async def startup():
-    import asyncio
-    asyncio.create_task(run_print())

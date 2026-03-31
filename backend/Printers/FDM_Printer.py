@@ -125,7 +125,7 @@ async def poll_printer():
                     "raw_status": status
                 }
 
-                print(f"✅ Stable | {ui_state}")
+                print(f"✅ Stable(FDM) | {ui_state}")
 
                 await broadcast(latest_status)
 
@@ -152,39 +152,45 @@ async def startup_event():
 @router.get("/files")
 async def list_files():
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
-            response = await client.get(f"{BASE_URL}/server/files/list")
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(
+                f"{BASE_URL}/server/files/list",
+                params={"root": "gcodes"}
+            )
 
         data = response.json()
 
-        result = data.get("result", [])
+        print("RAW RESPONSE:", data)  # 🔍 DEBUG
 
-        # Case 1: result is dict and has "files"
-        if isinstance(result, dict):
-            files_data = result.get("files", [])
-        # Case 2: result itself is list
-        elif isinstance(result, list):
-            files_data = result
+        # 🔥 HANDLE FORMAT SAFELY
+        if isinstance(data, list):
+            files_data = data
+
+        elif isinstance(data, dict):
+            if "result" in data:
+                if isinstance(data["result"], list):
+                    files_data = data["result"]
+                else:
+                    files_data = data["result"].get("files", [])
+            else:
+                files_data = data.get("files", [])
         else:
             files_data = []
 
         files = []
         for item in files_data:
-            path = item.get("path", "")
-            if path.endswith(".gcode"):
-                # Remove "gcodes/" prefix for clean display
-                filename = path.split("/")[-1]
-                files.append(filename)
+            if isinstance(item, dict):
+                path = item.get("path", "")
+                if path.endswith(".gcode") or path.endswith(".g"):
+                    files.append(path)
 
         return {"files": files}
 
     except Exception as e:
         print("File list error:", e)
         return {"files": []}
+        
 
-# =========================
-# UPLOAD
-# =========================
 @router.post("/upload")
 async def upload_gcode(file: UploadFile = File(...)):
     content = await file.read()

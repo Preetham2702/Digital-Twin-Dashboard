@@ -1,46 +1,23 @@
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 import asyncio
-import linuxcnc
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, UploadFile, File
+import websockets
+import json
 from typing import Set
-import os
 
 router = APIRouter()
 
-# =========================
-# CNC INIT
-# =========================
-s = linuxcnc.stat()
-c = linuxcnc.command()
+WS_URL = "ws://192.168.7.2:8000/websocket/linuxcnc"
+WS_PROTOCOL = "linuxcnc"
 
 connected_clients: Set[WebSocket] = set()
 latest_status = {}
 
-UPLOAD_DIR = "gcode_files"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-
-# =========================
-# STATE MAPPING
-# =========================
-def map_state(state):
-    mapping = {
-        1: "Idle",
-        2: "Running",
-        3: "Paused",
-        4: "Stopped"
-    }
-    return mapping.get(state, "Unknown")
-
-
-# =========================
-# WEBSOCKET
-# =========================
 @router.websocket("/ws/pocketnc")
 async def pocketnc_ws(websocket: WebSocket):
     await websocket.accept()
     connected_clients.add(websocket)
 
-    # send last data
     if latest_status:
         await websocket.send_json(latest_status)
 
@@ -51,9 +28,7 @@ async def pocketnc_ws(websocket: WebSocket):
         connected_clients.remove(websocket)
 
 
-# =========================
-# BROADCAST
-# =========================
+
 async def broadcast(data):
     dead = []
     for client in connected_clients:
@@ -66,84 +41,65 @@ async def broadcast(data):
         connected_clients.remove(d)
 
 
-# =========================
-# LIVE POLLING LOOP
-# =========================
-async def poll_cnc():
+async def listen_to_pocketnc():
     global latest_status
 
     while True:
         try:
-            s.poll()
+            async with websockets.connect(
+                WS_URL,
+                subprotocols=[WS_PROTOCOL]
+            ) as ws:
 
-            latest_status = {
-                "machine": "PocketNC",
-                "state": map_state(s.task_state),
-                "position": {
-                    "x": round(s.position[0], 3),
-                    "y": round(s.position[1], 3),
-                    "z": round(s.position[2], 3),
-                },
-                "spindle_speed": s.spindle[0]['speed'],
-                "feed_rate": s.feedrate,
-                "line": s.motion_line,
-                "file": s.file,
-                "tool": s.tool_in_spindle,
-            }
+                print("✅ Connected to PocketNC")
 
-            await broadcast(latest_status)
+                #LOGIN
+                await ws.send(json.dumps({
+                    "id": "Login",
+                    "user": "default",
+                    "password": "default"
+                }))
+
+                while True:
+                    msg = await ws.recv()
+                    res = json.loads(msg)
+
+                    #Login success
+                    if res.get("id") == "Login" and res.get("code") == "?OK":
+                        print("✅ Logged in")
+
+                        # Start watching RPM
+                        await ws.send(json.dumps({
+                            "id": "rpm",
+                            "command": "watch",
+                            "name": "halpin_spindle_voltage.speed_measured"
+                        }))
+
+                    #Live RPM
+                    if res.get("id") == "rpm" and "data" in res:
+                        rpm = float(res["data"])
+
+                        latest_status = {
+                            "machine": "PocketNC",
+                            "connected": True,
+                            "rpm": rpm
+                        }
+
+                        print(f"RPM: {rpm}")
+
+                        await broadcast(latest_status)
 
         except Exception as e:
-            print("CNC Error:", e)
+            print("❌ PocketNC Disconnected:", e)
 
-        await asyncio.sleep(0.3)
+            await broadcast({
+                "machine": "PocketNC",
+                "connected": False
+            })
+
+            await asyncio.sleep(5)
 
 
-# =========================
-# START LOOP
-# =========================
 @router.on_event("startup")
 async def startup_event():
-    asyncio.create_task(poll_cnc())
-
-
-# =========================
-# CONTROL APIs
-# =========================
-@router.post("/pocketnc/start")
-def start():
-    c.auto(linuxcnc.AUTO_RUN)
-    return {"status": "started"}
-
-
-@router.post("/pocketnc/pause")
-def pause():
-    c.auto(linuxcnc.AUTO_PAUSE)
-    return {"status": "paused"}
-
-
-@router.post("/pocketnc/resume")
-def resume():
-    c.auto(linuxcnc.AUTO_RESUME)
-    return {"status": "resumed"}
-
-
-@router.post("/pocketnc/stop")
-def stop():
-    c.abort()
-    return {"status": "stopped"}
-
-
-# =========================
-# UPLOAD + LOAD FILE
-# =========================
-@router.post("/pocketnc/upload")
-async def upload(file: UploadFile = File(...)):
-    filepath = os.path.join(UPLOAD_DIR, file.filename)
-
-    with open(filepath, "wb") as f:
-        f.write(await file.read())
-
-    c.program_open(filepath)
-
-    return {"status": "uploaded & loaded", "file": file.filename}
+    asyncio.create_task(listen_to_pocketnc())

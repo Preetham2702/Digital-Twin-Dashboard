@@ -1,202 +1,164 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, UploadFile, File
-from fastapi.responses import StreamingResponse
+from fastapi.responses import RedirectResponse
 import asyncio
-import time
-import socket
-from typing import Set
+import json
 import os
+from typing import Set
 from dotenv import load_dotenv
+import websockets
+import requests
+import socket
+import httpx
+
+load_dotenv()
 
 router = APIRouter()
 
-# =============================
-# CONFIG
-# =============================
+
 PRINTER_IP = os.getenv("RESIN_PRINTER_IP")
-PRINTER_PORT = 80
+WS_URL = f"ws://{PRINTER_IP}:3030"
+CAMERA_URL = os.getenv("RESIN_CAMERA_URL")
 
 clients: Set[WebSocket] = set()
 
-# =============================
-# STATE
-# =============================
-status = "Idle"
-layer = 0
-total_layers = 0
-z_height = 0
-layer_time = 0
-progress = 0
 
-printer_connected = False
-
-# parameters
-layer_height = 0
-exposure_time = 0
-bottom_exposure = 0
-bottom_layers = 0
-lift_time = 0
-retract_time = 0
+state = {
+    "status": "Idle",
+    "layer": 0,
+    "total_layers": 0,
+    "progress": 0,
+    "z_height": 0,
+    "layer_time": 0,
+    "printer_connected": False
+}
 
 
-# =============================
-# PRINTER CHECK
-# =============================
-def check_printer():
-    global printer_connected
-    try:
-        sock = socket.create_connection((PRINTER_IP, PRINTER_PORT), timeout=2)
-        sock.close()
-        printer_connected = True
-    except:
-        printer_connected = False
+# async def broadcast(data):
+#     dead = []
+#     for ws in clients:
+#         try:
+#             await ws.send_json(data)
+#         except:
+#             dead.append(ws)
+#     for d in dead:
+#         clients.remove(d)
 
-
-# =============================
-# STATE BUILDER
-# =============================
-def get_state():
-    return {
-        "status": status,
-        "layer": layer,
-        "total_layers": total_layers,
-        "progress": progress,
-        "z_height": z_height,
-        "layer_time": layer_time,
-        "printer_connected": printer_connected
-    }
-
-
-# =============================
-# BROADCAST
-# =============================
 async def broadcast(data):
     dead = []
-    for ws in clients:
+    for client in clients:
         try:
-            await ws.send_json(data)
+            await client.send_json(data)
         except:
-            dead.append(ws)
+            dead.append(client)
     for d in dead:
         clients.remove(d)
 
-
 # =============================
-# WEBSOCKET
+# FRONTEND WEBSOCKET
 # =============================
 @router.websocket("/ws/resin")
 async def resin_ws(websocket: WebSocket):
     await websocket.accept()
     clients.add(websocket)
 
-    await websocket.send_json(get_state())
+    print("🟢 UI Connected to Resin")
+
+    await websocket.send_json(state)
 
     try:
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
         clients.remove(websocket)
+        print("🔴 UI Disconnected")
 
+# async def poll_resin():
+#     while True:
+#         try:
+#             res = requests.get(f"http://{PRINTER_IP}:3030/api/job/status", timeout=2)
+#             data = res.json()
 
-# =============================
-# PRINT LOOP (REAL TIME)
-# =============================
-async def run_print():
-    global layer, progress, z_height, layer_time, status
+#             payload = {
+#                 "connected": True,
+#                 "status": data.get("status"),
+#                 "layer": data.get("layer"),
+#                 "progress": data.get("progress"),
+#             }
 
-    while True:
-        check_printer()
+#             await broadcast(payload)
 
-        if status == "Printing" and total_layers > 0:
+#         except:
+#             await broadcast({"connected": False})
 
-            if layer >= total_layers:
-                status = "Completed"
-                await broadcast(get_state())
-                continue
+#         await asyncio.sleep(1)
 
-            layer += 1
+async def listen_to_resin():
+    global state
 
-            # exposure logic
-            if layer <= bottom_layers:
-                exposure = bottom_exposure
-            else:
-                exposure = exposure_time
+    async with httpx.AsyncClient() as client:
+        while True:
+            try:
+                res = await client.get(f"http://{PRINTER_IP}:3030", timeout=2.0)
 
-            layer_time = exposure + lift_time + retract_time
+                # 🔥 Only mark connected if response is valid
+                if res.status_code == 200 and len(res.text) > 0:
+                    state["printer_connected"] = True
+                else:
+                    state["printer_connected"] = False
 
-            await asyncio.sleep(layer_time)
+                # ❗ No real API → keep previous values
+                print("🟢 Resin Reachable")
 
-            z_height = round(layer * layer_height, 3)
-            progress = round((layer / total_layers) * 100, 2)
+            except Exception as e:
+                state["printer_connected"] = False
+                print("🔴 Resin Disconnected:", e)
 
-            await broadcast(get_state())
-
-        else:
-            await broadcast(get_state())
+            await broadcast(state)
             await asyncio.sleep(1)
 
 
-# =============================
-# CONTROL
-# =============================
+@router.on_event("startup")
+async def startup_event():
+    asyncio.create_task(listen_to_resin())
+
 @router.post("/start")
 async def start():
-    global status
-    if not printer_connected:
-        return {"status": False, "error": "Printer not connected"}
-    status = "Printing"
+    state["status"] = "Printing"
+    print("🟢 Print Started")
     return {"status": True}
-
 
 @router.post("/pause")
 async def pause():
-    global status
-    status = "Paused"
+    state["status"] = "Paused"
+    print("⏸ Print Paused")
     return {"status": True}
-
 
 @router.post("/stop")
 async def stop():
-    global status, layer
-    status = "Stopped"
-    layer = 0
+    state["status"] = "Stopped"
+    state["layer"] = 0
+    print("🛑 Print Stopped")
     return {"status": True}
 
-
-# =============================
-# FILE UPLOAD
-# =============================
 @router.post("/upload")
 async def upload(file: UploadFile = File(...)):
-    global total_layers
-
     contents = await file.read()
+
+    os.makedirs("uploads", exist_ok=True)
 
     with open(f"uploads/{file.filename}", "wb") as f:
         f.write(contents)
 
-    total_layers = 2000  # 🔥 replace later with parser
+    state["total_layers"] = 2000  # TEMP
+
+    print(f"📦 File uploaded | Layers: {state['total_layers']}")
 
     return {
         "filename": file.filename,
-        "total_layers": total_layers
+        "total_layers": state["total_layers"]
     }
 
 
-# =============================
-# CAMERA
-# =============================
 @router.get("/video_feed")
 def video_feed():
-    def fake_stream():
-        while True:
-            yield (b"--frame\r\n"
-                   b"Content-Type: image/jpeg\r\n\r\n" +
-                   b"\xff\xd8\xff\xe0" +
-                   b"\x00" * 1024 +
-                   b"\r\n")
-            time.sleep(0.1)
-
-    return StreamingResponse(
-        fake_stream(),
-        media_type="multipart/x-mixed-replace; boundary=frame"
-    )
+    return RedirectResponse(CAMERA_URL)
