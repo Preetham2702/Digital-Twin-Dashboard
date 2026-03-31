@@ -101,7 +101,7 @@ export default function FDM({ onConnectionChange }: { onConnectionChange?: (v: b
               ...prev,
               {
                 time: prev.length,
-                feed: s.gcode_move?.speed ?? 0,
+                feed: (s.gcode_move?.speed ?? 0) / 60,
                 velocity: s.motion_report?.live_velocity ?? 0
               }
             ]
@@ -215,7 +215,7 @@ export default function FDM({ onConnectionChange }: { onConnectionChange?: (v: b
   }
 
   return (
-    <div className="flex flex-1 overflow-hidden relative">
+    <div className="flex h-[calc(100vh-64px)] overflow-hidden">
 
       {!connected && (
         <div className="absolute top-0 left-0 w-full text-white text-center py-1 font-semibold z-200">
@@ -224,7 +224,7 @@ export default function FDM({ onConnectionChange }: { onConnectionChange?: (v: b
       )}
 
       {/* LEFT PANEL */}
-      <div className="w-1/3 bg-slate-800 border-r border-slate-700 p-6 flex flex-col gap-6">
+      <div className="w-1/4 bg-slate-800 border-r border-slate-700 p-6 flex flex-col gap-6">
 
         <div>
         <p className="text-base md:text-lg lg:text-xl font-medium">
@@ -291,7 +291,7 @@ export default function FDM({ onConnectionChange }: { onConnectionChange?: (v: b
       </div>
 
       {/* RIGHT PANEL */}
-      <div className="flex-1 p-6 flex flex-col gap-6">
+      <div className="flex-1 p-6 flex flex-col gap-6 h-full overflow-y-auto">
 
         {/* ROW 1 - X Y Z */}
         <div className="flex gap-6">
@@ -341,43 +341,79 @@ export default function FDM({ onConnectionChange }: { onConnectionChange?: (v: b
 
         </div>
 
-        {/* ROW 3 - MOTION GRAPH */}
-        <div className="bg-slate-800 p-4 rounded h-[300px]">
-          <h3 className="text-lg font-semibold mb-3 text-slate-200">
-            Motion Analysis (Feed vs Velocity)
-          </h3>
+        {/* ROW 3 - MOTION GRAPHS (SEPARATE) */}
+        <div className="flex flex-col gap-6 h-[500px]">
 
-          <ResponsiveContainer width="100%" height="85%">
-            <LineChart data={motionData}>
-              <CartesianGrid stroke="#334155" strokeDasharray="3 3" />
+          {/* FEED GRAPH */}
+          <div className="bg-slate-800 p-4 rounded flex-1">
+            <h3 className="text-lg font-semibold mb-3 text-slate-200">
+              Feed Rate (mm/s)
+            </h3>
 
-              <XAxis
-                dataKey="time"
-                stroke="#94a3b8"
-                label={{ value: "Time (s)", position: "insideBottomRight", offset: -5 }}
-              />
+            <ResponsiveContainer width="100%" height="85%">
+              <LineChart data={motionData}>
+                <CartesianGrid stroke="#334155" strokeDasharray="3 3" />
 
-              <YAxis stroke="#94a3b8" />
+                <XAxis
+                  dataKey="time"
+                  stroke="#94a3b8"
+                  label={{ value: "Time (s)", position: "insideBottomRight", offset: -5 }}
+                />
 
-              <Tooltip />
+                <YAxis
+                  stroke="#94a3b8"
+                  domain={[0, 300]}
+                  ticks={[0, 100, 200, 300]}
+                />
 
-              <Line
-                type="monotone"
-                dataKey="feed"
-                stroke="#a855f7"
-                dot={false}
-                strokeWidth={2}
-              />
+                <Tooltip />
 
-              <Line
-                type="monotone"
-                dataKey="velocity"
-                stroke="#22c55e"
-                dot={false}
-                strokeWidth={2}
-              />
-            </LineChart>
-          </ResponsiveContainer>
+                <Line
+                  type="monotone"
+                  dataKey="feed"
+                  stroke="#a855f7"
+                  dot={false}
+                  strokeWidth={2}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+
+          {/* VELOCITY GRAPH */}
+          <div className="bg-slate-800 p-4 rounded flex-1">
+            <h3 className="text-lg font-semibold mb-3 text-slate-200">
+              Velocity (mm/s)
+            </h3>
+
+            <ResponsiveContainer width="100%" height="85%">
+              <LineChart data={motionData}>
+                <CartesianGrid stroke="#334155" strokeDasharray="3 3" />
+
+                <XAxis
+                  dataKey="time"
+                  stroke="#94a3b8"
+                  label={{ value: "Time (s)", position: "insideBottomRight", offset: -5 }}
+                />
+
+                <YAxis
+                  stroke="#94a3b8"
+                  domain={[0, 400]}
+                  ticks={[0, 100, 200, 300, 400]}
+                />
+
+                <Tooltip />
+
+                <Line
+                  type="monotone"
+                  dataKey="velocity"
+                  stroke="#22c55e"
+                  dot={false}
+                  strokeWidth={2}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+
         </div>
       </div>
     </div>
