@@ -74,9 +74,29 @@ export default function Resin({ onConnectionChange }: { onConnectionChange?: (v:
     }
   }, [])
 
-  const startPrint = async () => { await fetch("http://localhost:8000/start", { method: "POST" }) }
-  const pausePrint = async () => { await fetch("http://localhost:8000/pause", { method: "POST" }) }
-  const stopPrint  = async () => { await fetch("http://localhost:8000/stop",  { method: "POST" }) }
+  const startPrint = async () => {
+    await fetch("http://localhost:8000/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({})
+    })
+  }
+  
+  const pausePrint = async () => {
+    await fetch("http://localhost:8000/pause", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({})
+    })
+  }
+  
+  const stopPrint = async () => {
+    await fetch("http://localhost:8000/stop", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({})
+    })
+  }
 
   const uploadFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -87,7 +107,7 @@ export default function Resin({ onConnectionChange }: { onConnectionChange?: (v:
   }
 
   return (
-    <div className="h-screen bg-slate-900 text-gray-200 flex overflow-hidden">
+    <div className="flex h-[calc(100vh-64px)] overflow-hidden">
 
       {/* ===== LEFT PANEL ===== */}
       <div className="w-[30%] min-w-[340px] p-5 flex flex-col gap-4 border-r border-slate-700 overflow-hidden">
@@ -109,13 +129,9 @@ export default function Resin({ onConnectionChange }: { onConnectionChange?: (v:
           
           {/* CAMERA STREAM */}
           <img
-            src="http://localhost:8000/video_feed"
-            alt="stream"
+            src={`http://localhost:8000/preview?t=${Date.now()}`}
             className="w-full h-full object-cover"
             onError={(e) => {
-              console.log("Camera stream failed")
-
-              // fallback UI
               const target = e.currentTarget
               target.style.display = "none"
 
@@ -131,7 +147,7 @@ export default function Resin({ onConnectionChange }: { onConnectionChange?: (v:
                     color:#64748b;
                     font-size:14px;
                   ">
-                    Camera Not Available
+                    No Preview Available
                   </div>
                 `
               }

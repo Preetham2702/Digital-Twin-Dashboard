@@ -1,34 +1,36 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 import asyncio
-import websockets
+import socket
 import json
 from typing import Set
 
 router = APIRouter()
 
-WS_URL = "ws://192.168.7.2:8000/websocket/linuxcnc"
-WS_PROTOCOL = "linuxcnc"
-
 connected_clients: Set[WebSocket] = set()
-latest_status = {}
+
+# 👉 Use hostname if possible (better than changing IP)
+POCKETNC_IP = "169.254.222.72"   # or "pocketnc.local"
+PORT = 5000
 
 
+# =========================
+# FRONTEND WEBSOCKET
+# =========================
 @router.websocket("/ws/pocketnc")
 async def pocketnc_ws(websocket: WebSocket):
     await websocket.accept()
     connected_clients.add(websocket)
 
-    if latest_status:
-        await websocket.send_json(latest_status)
-
     try:
         while True:
-            await websocket.receive_text()
+            await asyncio.sleep(1)
     except WebSocketDisconnect:
         connected_clients.remove(websocket)
 
 
-
+# =========================
+# BROADCAST
+# =========================
 async def broadcast(data):
     dead = []
     for client in connected_clients:
@@ -41,65 +43,79 @@ async def broadcast(data):
         connected_clients.remove(d)
 
 
-async def listen_to_pocketnc():
-    global latest_status
-
+# =========================
+# SOCKET STREAM (NON-BLOCKING)
+# =========================
+async def stream_loop():
     while True:
         try:
-            async with websockets.connect(
-                WS_URL,
-                subprotocols=[WS_PROTOCOL]
-            ) as ws:
+            print("🔌 Connecting to PocketNC socket...")
 
-                print("✅ Connected to PocketNC")
+            # create socket (non-blocking via thread)
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
-                #LOGIN
-                await ws.send(json.dumps({
-                    "id": "Login",
-                    "user": "default",
-                    "password": "default"
-                }))
+            # connect without blocking event loop
+            await asyncio.to_thread(sock.connect, (POCKETNC_IP, PORT))
 
-                while True:
-                    msg = await ws.recv()
-                    res = json.loads(msg)
+            print("✅ Connected to PocketNC stream")
 
-                    #Login success
-                    if res.get("id") == "Login" and res.get("code") == "?OK":
-                        print("✅ Logged in")
-
-                        # Start watching RPM
-                        await ws.send(json.dumps({
-                            "id": "rpm",
-                            "command": "watch",
-                            "name": "halpin_spindle_voltage.speed_measured"
-                        }))
-
-                    #Live RPM
-                    if res.get("id") == "rpm" and "data" in res:
-                        rpm = float(res["data"])
-
-                        latest_status = {
-                            "machine": "PocketNC",
-                            "connected": True,
-                            "rpm": rpm
-                        }
-
-                        print(f"RPM: {rpm}")
-
-                        await broadcast(latest_status)
-
-        except Exception as e:
-            print("❌ PocketNC Disconnected:", e)
-
+            # 🔥 IMMEDIATE CONNECTION SIGNAL (YOUR REQUIREMENT)
             await broadcast({
-                "machine": "PocketNC",
-                "connected": False
+                "connected": True,
+                "raw_status": {}
             })
 
-            await asyncio.sleep(5)
+            buffer = ""
+
+            while True:
+                # read socket safely (non-blocking)
+                chunk = await asyncio.to_thread(sock.recv, 1024)
+
+                if not chunk:
+                    raise Exception("Socket disconnected")
+
+                buffer += chunk.decode()
+
+                while "\n" in buffer:
+                    line, buffer = buffer.split("\n", 1)
+
+                    raw = json.loads(line.strip())
+
+                    # format exactly for your frontend
+                    data = {
+                        "connected": True,
+                        "raw_status": {
+                            "spindle_speed": raw.get("rpm", 0),
+                            "feed_rate": raw.get("feed", 0),
+                            "toolhead": {
+                                "position": [
+                                    raw.get("x", 0),
+                                    raw.get("y", 0),
+                                    raw.get("z", 0),
+                                    raw.get("a", 0),
+                                    raw.get("b", 0),
+                                ]
+                            }
+                        }
+                    }
+                
+                    await broadcast(data)
+
+        except Exception as e:
+            print("❌ Socket error:", e)
+
+            # 🔥 SEND DISCONNECTED STATUS
+            await broadcast({
+                "connected": False,
+                "raw_status": {}
+            })
+
+            await asyncio.sleep(2)
 
 
+# =========================
+# START BACKGROUND STREAM
+# =========================
 @router.on_event("startup")
 async def startup_event():
-    asyncio.create_task(listen_to_pocketnc())
+    asyncio.create_task(stream_loop())

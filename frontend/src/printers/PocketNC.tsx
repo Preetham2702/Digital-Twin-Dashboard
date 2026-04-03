@@ -20,20 +20,42 @@ export default function PocketNC({ onConnectionChange }: any) {
   const { w, h } = useWindowSize();
 
   useEffect(() => {
-    let ws = new WebSocket("ws://localhost:8000/ws/printer");
+    const ws = new WebSocket("ws://localhost:8000/ws/pocketnc");
+  
+    // 🔄 connecting state
     onConnectionChange?.(null);
-    ws.onopen = () => onConnectionChange?.(true);
+  
+    ws.onopen = () => {
+      console.log("PocketNC WS Connected");
+    };
+  
     ws.onmessage = (event) => {
       const data = JSON.parse(event.data);
-      if (data?.raw_status) setStatus(data.raw_status);
+  
+      // ✅ FIXED: use PocketNC connection flag (NOT moonraker)
+      onConnectionChange?.(data?.connected ?? false);
+  
+      if (data?.raw_status) {
+        setStatus(data.raw_status);
+      }
     };
-    ws.onclose = () => onConnectionChange?.(false);
+  
+    ws.onclose = () => {
+      console.log("PocketNC WS Disconnected");
+      onConnectionChange?.(false);
+    };
+  
+    ws.onerror = (err) => {
+      console.error("PocketNC WS Error:", err);
+      onConnectionChange?.(false);
+    };
+  
     return () => ws.close();
   }, []);
-
+  
   const position = status?.toolhead?.position || [0, 0, 0];
   const spindle  = status?.spindle_speed || 0;
-  const feed     = status?.current_vel ? status.current_vel * 60 : 0;
+  const feed = status?.feed_rate || 0;
 
   // ╔══════════════════════════════════════════════════════╗
   // ║          LAYOUT TUNING — edit these values          ║
@@ -82,6 +104,15 @@ export default function PocketNC({ onConnectionChange }: any) {
   const gap          = Math.round(h * GAP_PCT);
   const streamH      = Math.round(h * STREAM_PCT);
 
+  const start = () =>
+    fetch("http://localhost:8000/pocketnc/start", { method: "POST" });
+  
+  const pause = () =>
+    fetch("http://localhost:8000/pocketnc/pause", { method: "POST" });
+  
+  const stop = () =>
+    fetch("http://localhost:8000/pocketnc/stop", { method: "POST" });
+
   return (
     <div
       className="overflow-hidden flex text-gray-200"
@@ -129,16 +160,9 @@ export default function PocketNC({ onConnectionChange }: any) {
         </div>
 
         <div className="flex gap-2">
-          {[
-            { icon: "▶", cls: "bg-green-600 hover:bg-green-600" },
-            { icon: "⏸", cls: "bg-yellow-500 hover:bg-yellow-500" },
-            { icon: "■", cls: "bg-red-600 hover:bg-red-600" },
-          ].map(({ icon, cls }) => (
-            <button key={icon} className={`flex-1 rounded ${cls}`}
-              style={{ padding: `${Math.round(gaugeSize * 0.045)}px 0`, fontSize: fontSize * 1.15 }}>
-              {icon}
-            </button>
-          ))}
+          <button onClick={start} className="flex-1 bg-green-600 rounded">▶</button>
+          <button onClick={pause} className="flex-1 bg-yellow-500 rounded">⏸</button>
+          <button onClick={stop}  className="flex-1 bg-red-600 rounded">■</button>
         </div>
 
         {/* Live Streaming — fixed height */}
@@ -170,8 +194,8 @@ export default function PocketNC({ onConnectionChange }: any) {
               ["X", position[0]],
               ["Y", position[1]],
               ["Z", position[2]],
-              ["A", 0],
-              ["B", 0],
+              ["A", position[3] ?? 0],
+              ["B", position[4] ?? 0],
             ].map(([lbl, val]) => (
               <AxisBox key={lbl as string} label={lbl as string} value={val as number}
                 w={axisW} h={axisH} fontSize={fontSize} />

@@ -160,7 +160,7 @@ async def list_files():
 
         data = response.json()
 
-        print("RAW RESPONSE:", data)  # 🔍 DEBUG
+
 
         # 🔥 HANDLE FORMAT SAFELY
         if isinstance(data, list):

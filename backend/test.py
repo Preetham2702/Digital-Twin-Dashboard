@@ -1,20 +1,11 @@
-import socket
-
-IP = "10.106.89.35"
-PORT = 3030
-
-sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-sock.connect((IP, PORT))
-
-print("✅ Connected to printer")
-
-# 🔥 Try sending basic commands
+import sys
+import linuxcnc
 try:
-    sock.send(b'\x00\x00\x00\x00')   # test packet
-    data = sock.recv(4096)
-    print("DATA:", data)
-
-except Exception as e:
-    print("Error:", e)
-
-sock.close()
+    s = linuxcnc.stat() # create a connection to the status channel
+    s.poll() # get current values
+except linuxcnc.error, detail:
+    print "error", detail
+    sys.exit(1)
+for x in dir(s):
+    if not x.startswith("_"):
+        print x, getattr(s,x)

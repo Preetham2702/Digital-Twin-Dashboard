@@ -47,13 +47,17 @@ export default function FDM({ onConnectionChange }: { onConnectionChange?: (v: b
       const res = await fetch("http://localhost:8000/files")
       if (res.ok) {
         const data = await res.json()
-        setPrinterFiles(data)
+  
+        console.log("FILES RESPONSE:", data) // optional debug
+  
+        setPrinterFiles(data.files || [])
       }
     } catch {
       console.error("Failed to fetch printer files")
     }
   }
   useEffect(() => {
+    fetchFiles()
     let isMounted = true
     let reconnectTimeout: any = null
   
@@ -176,7 +180,7 @@ export default function FDM({ onConnectionChange }: { onConnectionChange?: (v: b
     if (!selectedFile) return alert("Please select a file")
     if (!window.confirm("Start print?")) return
 
-    const res = await fetch(`http://localhost:8000/start/${selectedFile}`, {
+    const res = await fetch(`http://localhost:8000/start?filename=${encodeURIComponent(selectedFile)}`, {
       method: "POST",
     })
 
@@ -241,18 +245,26 @@ export default function FDM({ onConnectionChange }: { onConnectionChange?: (v: b
 
         {/* ✅ EXISTING FILES */}
         <div>
-          <label className="text-base md:text-lg font-medium text-slate-300">Existing Printer Files</label>
+          <label className="text-base md:text-lg font-medium text-slate-300">
+            Existing Printer Files
+          </label>
+
           <select
             value={selectedFile}
             onChange={(e) => setSelectedFile(e.target.value)}
             className="w-full text-base md:text-lg bg-slate-700 p-3 rounded border border-slate-600 mt-2"
           >
             <option value="">Select file...</option>
-            {printerFiles.map((file, index) => (
-              <option key={index} value={file}>
-                {file}
-              </option>
-            ))}
+
+            {printerFiles.length === 0 ? (
+              <option disabled>No files found</option>
+            ) : (
+              printerFiles.map((file, index) => (
+                <option key={index} value={file}>
+                  {file}
+                </option>
+              ))
+            )}
           </select>
         </div>
 
@@ -291,7 +303,7 @@ export default function FDM({ onConnectionChange }: { onConnectionChange?: (v: b
       </div>
 
       {/* RIGHT PANEL */}
-      <div className="flex-1 p-6 flex flex-col gap-6 h-full overflow-y-auto">
+      <div className="flex-1 pt-12 px-6 pb-6 flex flex-col gap-6 h-full overflow-y-auto">
 
         {/* ROW 1 - X Y Z */}
         <div className="flex gap-6">
@@ -311,7 +323,7 @@ export default function FDM({ onConnectionChange }: { onConnectionChange?: (v: b
         </div>
 
         {/* ROW 2 - NOZZLE + BED */}
-        <div className="flex gap-6">
+        <div className="flex gap-10">
 
           <div className="bg-slate-800 p-6 rounded border border-slate-700 flex-1">
           <h3 className="mb-4 text-lg md:text-xl font-semibold text-slate-200">
