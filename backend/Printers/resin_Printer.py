@@ -15,6 +15,8 @@ PRINTER_IP = os.getenv("RESIN_PRINTER_IP")
 
 clients: Set[WebSocket] = set()
 
+NC_PATH = "/home/pocketnc/machinekit/nc_files"
+
 state = {
     "status": "Idle",
     "layer": 0,
@@ -134,17 +136,11 @@ async def upload(file: UploadFile = File(...)):
         print("UPLOAD ERROR:", e)
         return {"success": False}
 
-
-# =============================
-# IMAGE PREVIEW (WORKING)
-# =============================
-@router.get("/preview")
-def preview():
-    # 🔥 Replace this with YOUR actual BMP file from /media/
-    url = f"http://{PRINTER_IP}:3030/media/mmcblk0p1/history_image/preview.bmp"
-
+@router.get("/pocketnc/files")
+def list_files():
     try:
-        res = requests.get(url)
-        return StreamingResponse(iter([res.content]), media_type="image/bmp")
-    except:
-        return {"error": "Preview not available"}
+        files = os.listdir(NC_PATH)
+        return {"files": files}
+    except Exception as e:
+        return {"error": str(e)}
+
