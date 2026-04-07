@@ -290,7 +290,7 @@ export default function FDM({ onConnectionChange }: { onConnectionChange?: (v: b
         <div className="flex-1 bg-black border border-slate-600 rounded overflow-hidden">
           {connected ? (
             <img
-              src="http://10.106.99.97:8080/?action=stream"
+              src="http://localhost:8000/video_feed"
               className="w-full h-full object-cover"
               alt="Live Stream"
             />
