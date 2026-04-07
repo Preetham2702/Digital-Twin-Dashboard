@@ -217,6 +217,7 @@ export default function FDM({ onConnectionChange }: { onConnectionChange?: (v: b
       setTimeout(() => setActionMessage(""), 3000)
     }
   }
+  const ip = import.meta.env.VITE_PRINTER_IP
 
   return (
     <div className="flex h-[calc(100vh-64px)] overflow-hidden">
@@ -290,7 +291,7 @@ export default function FDM({ onConnectionChange }: { onConnectionChange?: (v: b
         <div className="flex-1 bg-black border border-slate-600 rounded overflow-hidden">
           {connected ? (
             <img
-              src="http://localhost:8000/video_feed"
+              src={`http://${ip}:8080/?action=stream`}
               className="w-full h-full object-cover"
               alt="Live Stream"
             />
@@ -299,7 +300,9 @@ export default function FDM({ onConnectionChange }: { onConnectionChange?: (v: b
               Live Streaming Video
             </div>
           )}
+          
         </div>
+        
       </div>
 
       {/* RIGHT PANEL */}

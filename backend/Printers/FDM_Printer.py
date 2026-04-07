@@ -13,7 +13,7 @@ PRINTER_IP = os.getenv("FDM_PRINTER_IP")
 if not PRINTER_IP:
     raise ValueError("FDM_PRINTER_IP not set in .env file")
 BASE_URL = f"http://{PRINTER_IP}:7125"
-PRINTER_STREAM_URL = f"{BASE_URL}/webcam/?action=stream"
+PRINTER_STREAM_URL = f"http://{PRINTER_IP}:8080/?action=stream"
 
 POLL_INTERVAL = 5 
 
@@ -273,14 +273,16 @@ async def pause_print():
 # VIDEO STREAM
 # =========================
 @router.get("/video_feed")
-async def video_feed():
-    async def generate():
-        async with httpx.AsyncClient(timeout=None) as client:
-            async with client.stream("GET", PRINTER_STREAM_URL) as r:
-                async for chunk in r.aiter_bytes():
+def video_feed():
+    def generate():
+        try:
+            with requests.get(PRINTER_STREAM_URL, stream=True) as r:
+                for chunk in r.raw:
                     yield chunk
+        except Exception as e:
+            print("Stream error:", e)
 
     return StreamingResponse(
         generate(),
-        media_type="multipart/x-mixed-replace; boundary=frame"
+        media_type="multipart/x-mixed-replace; boundary=--frame"
     )
