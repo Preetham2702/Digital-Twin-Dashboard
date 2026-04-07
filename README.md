@@ -179,7 +179,7 @@ The backend connects via socket/SSH to stream live data.
 
 This is not just a monitoring dashboard.
 
-👉 It acts as a Digital Twin Control System, where users can:
+👉 It a Digital Twin Control System, where users can:
 
 Observe machine state in real-time
 Send commands remotely
