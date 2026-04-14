@@ -39,6 +39,9 @@ export default function FDM({ onConnectionChange }: { onConnectionChange?: (v: b
     { time: number; feed: number; velocity: number }[]
   >([])
 
+  const [gcodeLines, setGcodeLines] = useState<string[]>([])
+  const [currentLine, setCurrentLine] = useState<number>(0)
+
   // =============================
   // FETCH FILES
   // =============================
@@ -56,101 +59,156 @@ export default function FDM({ onConnectionChange }: { onConnectionChange?: (v: b
       console.error("Failed to fetch printer files")
     }
   }
-  useEffect(() => {
-    fetchFiles()
-    let isMounted = true
-    let reconnectTimeout: any = null
-  
-    const connect = () => {
-      if (!isMounted) return
-  
-      const socket = new WebSocket("ws://localhost:8000/ws/printer")
-      socketRef.current = socket
-  
-      socket.onopen = () => {
-        console.log("FDM connected")
-      }
-  
-      socket.onmessage = (event) => {
-        if (!isMounted) return
-  
-        try {
-          const data = JSON.parse(event.data)
-          const isConnected = data.moonraker_connected ?? false
-  
-          setConnected(isConnected)
-  
-          if (typeof onConnectionChange === "function") {
-            onConnectionChange(isConnected)
-          }
-  
-          setStatus(data.ui_state ?? "Idle")
-  
-          const s = data.raw_status
-          if (!s) return
-  
-          setNozzleTemp(s.extruder?.temperature ?? 0)
-          setNozzleTarget(s.extruder?.target ?? 0)
-          setBedTemp(s.heater_bed?.temperature ?? 0)
-          setBedTarget(s.heater_bed?.target ?? 0)
-  
-          setX(s.toolhead?.position?.[0] ?? 0)
-          setY(s.toolhead?.position?.[1] ?? 0)
-          setZ(s.toolhead?.position?.[2] ?? 0)
-  
-          setProgress((s.virtual_sdcard?.progress ?? 0) * 100)
+  const fetchGcode = async (filename: string) => {
+    try {
+      const res = await fetch(`http://localhost:8000/gcode?file=${filename}`)
 
-          setMotionData(prev => {
-            const newData = [
-              ...prev,
-              {
-                time: prev.length,
-                feed: (s.gcode_move?.speed ?? 0) / 60,
-                velocity: s.motion_report?.live_velocity ?? 0
-              }
-            ]
-            if (newData.length > 40) newData.shift()
-            return newData
-          })
-  
-        } catch (err) {
-          console.error("WS error:", err)
-        }
+      // ❌ if backend fails → clear viewer
+      if (!res.ok) {
+        setGcodeLines([])
+        return
       }
-  
-      socket.onclose = () => {
-        if (!isMounted) return
-  
-        console.log("FDM disconnected")
-  
-        setConnected(false)
-  
+
+      const text = await res.text()
+
+      // ❌ if error JSON comes as text → ignore
+      if (text.includes('"error"') || text.includes("Not Found")) {
+        setGcodeLines([])
+        return
+      }
+
+      setGcodeLines(text.split("\n"))
+
+    } catch {
+      setGcodeLines([])  // ✅ fallback
+    }
+  }
+
+  const [fullscreen, setFullscreen] = useState(false)
+
+useEffect(() => {
+  fetchFiles()
+
+  let isMounted = true
+  let reconnectTimeout: any = null
+
+  const connect = () => {
+    if (!isMounted) return
+
+    const socket = new WebSocket("ws://localhost:8000/ws/printer")
+    socketRef.current = socket
+
+    socket.onopen = () => {
+      console.log("FDM connected")
+    }
+
+    socket.onmessage = (event) => {
+      if (!isMounted) return
+
+      try {
+        const data = JSON.parse(event.data)
+        const isConnected = data.moonraker_connected ?? false
+
+        setConnected(isConnected)
+
         if (typeof onConnectionChange === "function") {
-          onConnectionChange(false)
+          onConnectionChange(isConnected)
         }
-  
-        // 🔥 AUTO RECONNECT
-        reconnectTimeout = setTimeout(() => {
-          connect()
-        }, 2000)
+
+        setStatus(data.ui_state ?? "Idle")
+
+        const s = data.raw_status
+        if (!s) return
+
+        const currentFile = s.print_stats?.filename || ""
+        if (currentFile && currentFile !== selectedFile) {
+          setSelectedFile(currentFile)
+          fetchGcode(currentFile)
+        }
+        if (!currentFile) {
+          setSelectedFile("")
+          setGcodeLines([])
+          setCurrentLine(0)
+        }
+
+        setNozzleTemp(s.extruder?.temperature ?? 0)
+        setNozzleTarget(s.extruder?.target ?? 0)
+        setBedTemp(s.heater_bed?.temperature ?? 0)
+        setBedTarget(s.heater_bed?.target ?? 0)
+
+        setX(s.toolhead?.position?.[0] ?? 0)
+        setY(s.toolhead?.position?.[1] ?? 0)
+        setZ(s.toolhead?.position?.[2] ?? 0)
+
+        setProgress((s.virtual_sdcard?.progress ?? 0) * 100)
+
+        setMotionData(prev => [
+            ...prev,
+            {
+            time: prev.length > 0 ? prev[prev.length - 1].time + 1 : 0,
+            feed: (s.gcode_move?.speed ?? 0) / 60,
+            velocity: s.motion_report?.live_velocity ?? 0
+            }
+          ].slice(-50))
+
+        // ✅ 🔥 FIXED GCODE LINE TRACKING (NO STALE STATE ISSUE)
+        const pos = data.file_position ?? 0
+
+        if (gcodeLines.length > 0) {
+          const text = gcodeLines.join("\n")
+
+          // clamp to avoid overflow
+          const safePos = Math.min(pos, text.length)
+
+          const line = text.substring(0, safePos).split("\n").length - 1
+
+          setCurrentLine(line)
+        }
+
+      } catch (err) {
+        console.error("WS error:", err)
       }
     }
-  
-    connect()
-  
-    return () => {
-      isMounted = false
-  
-      if (socketRef.current) {
-        socketRef.current.close()
+
+    socket.onclose = () => {
+      if (!isMounted) return
+
+      console.log("FDM disconnected")
+
+      setConnected(false)
+
+      if (typeof onConnectionChange === "function") {
+        onConnectionChange(false)
       }
-  
-      if (reconnectTimeout) {
-        clearTimeout(reconnectTimeout)
-      }
+
+      reconnectTimeout = setTimeout(() => {
+        connect()
+      }, 2000)
     }
-  
-  }, [])
+  }
+
+  connect()
+
+  return () => {
+    isMounted = false
+
+    if (socketRef.current) {
+      socketRef.current.close()
+    }
+
+    if (reconnectTimeout) {
+      clearTimeout(reconnectTimeout)
+    }
+  }
+
+}, [gcodeLines]) 
+useEffect(() => {
+  if (selectedFile) {
+    fetchGcode(selectedFile)
+    setCurrentLine(0) // reset highlight
+  }
+}, [selectedFile])
+
   // =============================
   // ACTIONS (UNCHANGED)
   // =============================
@@ -171,7 +229,12 @@ export default function FDM({ onConnectionChange }: { onConnectionChange?: (v: b
     if (res.ok) {
       setUploadMessage("Upload successful ✓")
       setTimeout(() => setUploadMessage(""), 3000)
+
       fetchFiles()
+
+      // ✅ ADD THIS
+      setSelectedFile(file.name)
+      fetchGcode(file.name)
     }
   }
 
@@ -219,218 +282,170 @@ export default function FDM({ onConnectionChange }: { onConnectionChange?: (v: b
   }
   const ip = import.meta.env.VITE_PRINTER_IP
 
-  return (
-    <div className="flex h-[calc(100vh-64px)] overflow-hidden">
+return (
+  <div className="h-[calc(100vh-64px)] p-3 grid grid-cols-[2fr_3fr] gap-2">
 
-      {!connected && (
-        <div className="absolute top-0 left-0 w-full text-white text-center py-1 font-semibold z-200">
-          ⚠️ FDM Disconnected
-        </div>
-      )}
+    {!connected && (
+      <div className="absolute top-0 left-0 w-full text-white text-center py-1 font-semibold z-200">
+        ⚠️ FDM Disconnected
+      </div>
+    )}
 
-      {/* LEFT PANEL */}
-      <div className="w-1/4 bg-slate-800 border-r border-slate-700 p-6 flex flex-col gap-6">
+    {/* LEFT COLUMN */}
+    <div className="flex flex-col gap-4 min-w-0">
 
+      {/* CONTROLS */}
+      <div className="bg-slate-800/5 p-4 flex flex-col gap-4 rounded border border-slate-700">
         <div>
-        <p className="text-base md:text-lg lg:text-xl font-medium">
-          Status: <span className="text-green-400 font-semibold">{status}</span>
-        </p>
-
-        <p className="text-base md:text-lg lg:text-xl">
-          Progress: {progress.toFixed(1)}%
-        </p>
-          {actionMessage && (
-            <p className="text-green-400 text-sm mt-1">{actionMessage}</p>
-          )}
+          <p className="text-xl">Status: <span className="text-green-400 font-semibold">{status}</span></p>
+          <p className="text-xl">Progress: {progress.toFixed(2)}%</p>
+          {actionMessage && <p className="text-green-400 text-sm mt-1">{actionMessage}</p>}
         </div>
 
-        {/* ✅ EXISTING FILES */}
-        <div>
-          <label className="text-base md:text-lg font-medium text-slate-300">
-            Existing Printer Files
-          </label>
+        <select
+          value={selectedFile}
+          onChange={(e) => setSelectedFile(e.target.value)}
+          className="bg-slate-800 p-2 rounded w-full"
+        >
+          <option>Select file...</option>
+          {printerFiles.map((f, i) => <option key={i}>{f}</option>)}
+        </select>
 
-          <select
-            value={selectedFile}
-            onChange={(e) => setSelectedFile(e.target.value)}
-            className="w-full text-base md:text-lg bg-slate-700 p-3 rounded border border-slate-600 mt-2"
-          >
-            <option value="">Select file...</option>
+        <input
+          type="file"
+          onChange={handleUpload}
+          className="bg-slate-800 p-2 rounded w-full"
+        />
+        {uploadMessage && <p className="text-green-400 text-xl mt-1">{uploadMessage}</p>}
 
-            {printerFiles.length === 0 ? (
-              <option disabled>No files found</option>
-            ) : (
-              printerFiles.map((file, index) => (
-                <option key={index} value={file}>
-                  {file}
-                </option>
-              ))
-            )}
-          </select>
+        <div className="flex gap-2">
+          <button onClick={handleStart} className="flex-1 bg-green-600 p-2 rounded">▶</button>
+          <button onClick={handlePause} className="flex-1 bg-yellow-500 p-2 rounded">⏸</button>
+          <button onClick={handleStop} className="flex-1 bg-red-600 p-2 rounded">■</button>
         </div>
+      </div>
 
-        {/* Upload Section (unchanged styling) */}
-        <div>
-          <label className="text-base md:text-lg font-medium text-slate-300">G-Code File</label>
-          <input
-            type="file"
-            onChange={handleUpload}
-            className="w-full text-base md:text-lg bg-slate-700 p-3 rounded border border-slate-600 cursor-pointer"
+      {/* VIDEO */}
+      <div className="bg-black flex-1 rounded border border-slate-700 overflow-hidden min-h-[300px]">
+        {connected ? (
+          <img
+            src={`http://${ip}:8080/?action=stream`}
+            className="w-full h-full object-cover cursor-pointer"
+            onClick={() => setFullscreen(true)}   // 🔥 CLICK
           />
-          {uploadMessage && (
-            <p className="text-green-400 text-xs mt-1">{uploadMessage}</p>
-          )}
-        </div>
-
-        <div className="flex gap-4">
-          <button onClick={handleStart} className="flex-1 bg-green-600 hover:bg-green-700 rounded p-2">▶</button>
-          <button onClick={handlePause} className="flex-1 bg-yellow-500 hover:bg-yellow-600 rounded p-2 text-black">⏸</button>
-          <button onClick={handleStop} className="flex-1 bg-red-600 hover:bg-red-700 rounded p-2">■</button>
-        </div>
-
-        <div className="flex-1 bg-black border border-slate-600 rounded overflow-hidden">
-          {connected ? (
-            <img
-              src={`http://${ip}:8080/?action=stream`}
-              className="w-full h-full object-cover"
-              alt="Live Stream"
-            />
-          ) : (
-            <div className="flex items-center justify-center h-full text-slate-500">
-              Live Streaming Video
-            </div>
-          )}
-          
-        </div>
-        
+        ) : (
+          <div className="flex items-center justify-center h-full text-slate-500">
+            Live Streaming Video
+          </div>
+        )}
       </div>
 
-      {/* RIGHT PANEL */}
-      <div className="flex-1 pt-12 px-6 pb-6 flex flex-col gap-6 h-full overflow-y-auto">
-
-        {/* ROW 1 - X Y Z */}
-        <div className="flex gap-6">
-          {[{label:"X",value:x},{label:"Y",value:y},{label:"Z",value:z}].map(axis => (
-            <div
-              key={axis.label}
-              className="bg-slate-800 px-6 py-4 rounded border border-slate-700 flex-1"
-            >
-              <p className="text-base md:text-lg font-semibold text-slate-300">
-                {axis.label} Position
-              </p>
-              <p className="text-2xl text-green-400">
-                {axis.value.toFixed(2)} mm
-              </p>
-            </div>
-          ))}
-        </div>
-
-        {/* ROW 2 - NOZZLE + BED */}
-        <div className="flex gap-10">
-
-          <div className="bg-slate-800 p-6 rounded border border-slate-700 flex-1">
-          <h3 className="mb-4 text-lg md:text-xl font-semibold text-slate-200">
-            Nozzle
-          </h3>
-            <div className="flex items-center gap-8">
-              <SemiGauge value={nozzleTemp} max={300} color="#f97316" />
-              <div>
-                <p className="text-lg">Temp: {nozzleTemp.toFixed(1)}°C</p>
-                <p className="text-slate-400">Target: {nozzleTarget}°C</p>
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-slate-800 p-6 rounded border border-slate-700 flex-1">
-          <h3 className="mb-4 text-lg md:text-xl font-semibold text-slate-200">
-            Bed
-          </h3>
-            <div className="flex items-center gap-8">
-              <SemiGauge value={bedTemp} max={120} color="#3b82f6" />
-              <div>
-                <p className="text-lg">Temp: {bedTemp.toFixed(1)}°C</p>
-                <p className="text-slate-400">Target: {bedTarget}°C</p>
-              </div>
-            </div>
-          </div>
-
-        </div>
-
-        {/* ROW 3 - MOTION GRAPHS (SEPARATE) */}
-        <div className="flex flex-col gap-6 h-[500px]">
-
-          {/* FEED GRAPH */}
-          <div className="bg-slate-800 p-4 rounded flex-1">
-            <h3 className="text-lg font-semibold mb-3 text-slate-200">
-              Feed Rate (mm/s)
-            </h3>
-
-            <ResponsiveContainer width="100%" height="85%">
-              <LineChart data={motionData}>
-                <CartesianGrid stroke="#334155" strokeDasharray="3 3" />
-
-                <XAxis
-                  dataKey="time"
-                  stroke="#94a3b8"
-                  label={{ value: "Time (s)", position: "insideBottomRight", offset: -5 }}
-                />
-
-                <YAxis
-                  stroke="#94a3b8"
-                  domain={[0, 300]}
-                  ticks={[0, 100, 200, 300]}
-                />
-
-                <Tooltip />
-
-                <Line
-                  type="monotone"
-                  dataKey="feed"
-                  stroke="#a855f7"
-                  dot={false}
-                  strokeWidth={2}
-                />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-
-          {/* VELOCITY GRAPH */}
-          <div className="bg-slate-800 p-4 rounded flex-1">
-            <h3 className="text-lg font-semibold mb-3 text-slate-200">
-              Velocity (mm/s)
-            </h3>
-
-            <ResponsiveContainer width="100%" height="85%">
-              <LineChart data={motionData}>
-                <CartesianGrid stroke="#334155" strokeDasharray="3 3" />
-
-                <XAxis
-                  dataKey="time"
-                  stroke="#94a3b8"
-                  label={{ value: "Time (s)", position: "insideBottomRight", offset: -5 }}
-                />
-
-                <YAxis
-                  stroke="#94a3b8"
-                  domain={[0, 400]}
-                  ticks={[0, 100, 200, 300, 400]}
-                />
-
-                <Tooltip />
-
-                <Line
-                  type="monotone"
-                  dataKey="velocity"
-                  stroke="#22c55e"
-                  dot={false}
-                  strokeWidth={2}
-                />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-
-        </div>
-      </div>
     </div>
-  )
+
+    {/* RIGHT COLUMN */}
+    <div className="flex flex-col gap-4 min-w-0 overflow-y-auto">
+
+      {/* TOP: XYZ + GAUGES */}
+      <div className="flex gap-3 flex-wrap">
+        {[{label:"X",value:x},{label:"Y",value:y},{label:"Z",value:z}].map(axis => (
+          <div key={axis.label} className="bg-slate-800/5 p-3 flex-1 w-[50px] rounded border border-slate-700 flex flex-col justify-center">
+            <p>{axis.label}</p>
+            <p className="text-green-400">{axis.value.toFixed(2)}</p>
+          </div>
+        ))}
+        <div className="bg-slate-800/5 p-3 flex-1 min-w-[200px] rounded border border-slate-700">
+          <p>Nozzle</p>
+          <div className="flex gap-3 items-center">
+            <SemiGauge value={nozzleTemp} max={300} color="#ee810d" />
+            <div>
+              <p>{nozzleTemp.toFixed(1)}°C</p>
+              <p className="text-xs text-slate-400">Target: {nozzleTarget}</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-slate-800/5 p-3 flex-1 min-w-[200px] rounded border border-slate-700">
+          <p>Bed</p>
+          <div className="flex gap-3 items-center">
+            <SemiGauge value={bedTemp} max={120} color="#3b82f6" />
+            <div>
+              <p>{bedTemp.toFixed(1)}°C</p>
+              <p className="text-xs text-slate-400">Target: {bedTarget}</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* FEED */}
+      <div className="bg-slate-800/5 p-4 rounded border border-slate-700 w-full h-[180px]">
+        <h3 className="mb-2">Feed Rate</h3>
+        <ResponsiveContainer width="100%" height="85%">
+          <LineChart data={motionData}>
+            <CartesianGrid stroke="#1e293b" vertical={false} />
+            <XAxis dataKey="time" stroke="#94a3b8" tick={{ fontSize: 10 }} domain={['dataMin', 'dataMax']} />
+            <YAxis stroke="#94a3b8" tick={{ fontSize: 10 }} />
+            <Tooltip contentStyle={{ backgroundColor: "#0f172a", border: "1px solid #334155" }} />
+            <Line type="monotone" dataKey="feed" stroke="#a855f7" strokeWidth={2} dot={false} isAnimationActive={false} />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+
+      {/* VELOCITY */}
+      <div className="bg-slate-800/5 p-4 rounded border border-slate-700 w-full h-[180px]">
+        <h3 className="mb-2">Velocity</h3>
+        <ResponsiveContainer width="100%" height="85%">
+          <LineChart data={motionData}>
+            <CartesianGrid stroke="#334155" />
+            <XAxis dataKey="time" />
+            <YAxis />
+            <Tooltip />
+            <Line dataKey="velocity" stroke="#08eb5c" dot={false} />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+
+      {/* GCODE VIEWER */}
+      <p className="text-xs text-slate-400 mb-1">
+        File: {selectedFile || "None"}
+      </p>
+      <div className="bg-slate-800/5 p-4 rounded border border-slate-700 w-full h-[280px] overflow-y-auto">
+        <h3 className="mb-2">G-Code</h3>
+        <div className="text-sm font-mono space-y-1">
+          {gcodeLines.length === 0 ? (
+            <div className="flex items-center justify-center h-full text-slate-500">
+              No G-code loaded
+            </div>
+          ) : (
+            gcodeLines.map((line, i) => (
+              <div
+                key={i}
+                className={`px-2 py-0.5 rounded ${
+                  i === currentLine
+                    ? "bg-green-500/20 text-green-400"
+                    : "text-slate-400"
+                }`}
+              >
+                {line}
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+
+    </div>
+    {/* 🔥 FULLSCREEN POPUP */}
+    {fullscreen && (
+      <div
+        className="fixed inset-0 bg-black/80 flex items-center justify-center z-50"
+        onClick={() => setFullscreen(false)}
+      >
+        <img
+          src={`http://${ip}:8080/?action=stream`}
+          className="w-full h-full object-contain"
+        />
+      </div>
+    )}
+
+  </div>
+)
 }

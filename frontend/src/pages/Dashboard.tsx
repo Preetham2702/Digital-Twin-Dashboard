@@ -64,7 +64,7 @@ export default function Dashboard() {
       </div>
 
       {/* TOP BAR */}
-      <header className="h-16 bg-slate-800 border-b border-slate-700 flex items-center px-6 justify-between">
+      <header className="h-16 bg-slate-900 border-b border-slate-500 flex items-center px-6 justify-between">
 
         {/* LEFT */}
         <div className="flex items-center">

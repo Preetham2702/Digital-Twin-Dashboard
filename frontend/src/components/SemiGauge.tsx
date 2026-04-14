@@ -13,7 +13,7 @@ type GaugeProps = {
     const offset = circumference * (1 - normalizedValue)
   
     return (
-      <svg width="180" height="110" viewBox="0 0 180 110">
+      <svg width="120" height="110" viewBox="0 0 180 110">
         <path
           d="M20 90 A70 70 0 0 1 160 90"
           fill="transparent"

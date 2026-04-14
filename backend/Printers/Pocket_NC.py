@@ -294,7 +294,3 @@ def get_file_content(file: str):
 @router.post("/pocketnc/home")
 def home_axis(axis: str):
     return send_control({"action": "home", "axis": axis})
-
-@router.post("/pocketnc/home_all")
-def home_all():
-    return send_control({"action": "home_all"})

@@ -371,7 +371,7 @@ export default function PocketNC({ onConnectionChange }: any) {
 
             <button
               onClick={() =>
-                fetch("http://localhost:8000/pocketnc/home-all", {
+                fetch("http://localhost:8000/pocketnc/home_all", {
                   method: "POST",
                 })
               }

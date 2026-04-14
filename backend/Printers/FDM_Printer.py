@@ -122,7 +122,8 @@ async def poll_printer():
                 latest_status = {
                     "moonraker_connected": True,
                     "ui_state": ui_state,
-                    "raw_status": status
+                    "raw_status": status,
+                    "file_position": status.get("virtual_sdcard", {}).get("file_position", 0)
                 }
 
                 print(f"✅ Stable(FDM) | {ui_state}")
@@ -286,3 +287,16 @@ def video_feed():
         generate(),
         media_type="multipart/x-mixed-replace; boundary=--frame"
     )
+
+@router.get("/gcode")
+async def get_gcode(file: str):
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(
+                f"{BASE_URL}/server/files/gcodes/{file}"
+            )
+        return response.text
+
+    except Exception as e:
+        print("GCODE fetch error:", e)
+        return ""
