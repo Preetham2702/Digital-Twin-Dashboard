@@ -42,6 +42,7 @@ export default function FDM({ onConnectionChange }: { onConnectionChange?: (v: b
   const [gcodeLines, setGcodeLines] = useState<string[]>([])
   const [currentLine, setCurrentLine] = useState<number>(0)
   const gcodeRef = useRef<string[]>([])
+  const [startLine, setStartLine] = useState(0)
 
   // =============================
   // FETCH FILES
@@ -67,20 +68,37 @@ export default function FDM({ onConnectionChange }: { onConnectionChange?: (v: b
       const cleanFile = filename.replace(".cache/", "")
 
       const res = await fetch(`http://localhost:8000/gcode?file=${cleanFile}`)
-
       if (!res.ok) return
 
-      const text = await res.text()
-
+      let text = await res.text()
       if (!text || text.length < 10) return
 
-      // 🔥 LIMIT FOR PERFORMANCE
-      const lines = text.split("\n").slice(0, 2000)
+      // 🔥 FIX ESCAPED NEWLINES
+      let lines = text.replace(/\\n/g, "\n").split("\n")
 
-      // 🔥 SAVE TO REF (FAST ACCESS)
+      // 🔥 REMOVE THUMBNAIL BLOCK
+      const thumbStart = lines.findIndex(l => l.includes("thumbnail begin"))
+      const thumbEnd = lines.findIndex(l => l.includes("thumbnail end"))
+
+      if (thumbStart !== -1 && thumbEnd !== -1) {
+        lines.splice(thumbStart, thumbEnd - thumbStart + 1)
+      }
+
+      // 🔥 REMOVE HEADER
+      const startIdxRaw = lines.findIndex(line => {
+        const clean = line.trim()
+        if (!clean || clean.startsWith(";")) return false
+        return clean.startsWith("G") || clean.startsWith("M")
+      })
+
+      if (startIdxRaw > 0) {
+        lines = lines.slice(startIdxRaw)
+      }
+
+      // 🔥 LIMIT
+      lines = lines.slice(0, 2000)
+
       gcodeRef.current = lines
-
-      // 🔥 UPDATE UI
       setGcodeLines(lines)
 
     } catch (e) {
