@@ -218,24 +218,31 @@ async def upload_gcode(file: UploadFile = File(...)):
 @router.post("/start")
 async def start_print(filename: str):
     try:
-        safe_filename = urllib.parse.unquote(filename)
+        async with httpx.AsyncClient(timeout=10.0) as client:
 
-        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0)) as client:
-            response = await client.post(
-                f"{BASE_URL}/printer/print/start",
-                json={"filename": safe_filename}
+            # 🔥 GET CURRENT STATE
+            status_res = await client.get(
+                f"{BASE_URL}/printer/objects/query",
+                params={"print_stats": ""}
             )
 
-        print("Start response:", response.text)
+            status = status_res.json()["result"]["status"]["print_stats"]["state"]
 
-        return {
-            "status": response.is_success,
-            "response": response.text
-        }
+            # 🔥 CASE 1: RESUME IF PAUSED
+            if status == "paused":
+                await client.post(f"{BASE_URL}/printer/print/resume")
+                return {"status": "resumed"}
+
+            # 🔥 CASE 2: START NEW PRINT
+            await client.post(
+                f"{BASE_URL}/printer/print/start",
+                json={"filename": filename}
+            )
+
+            return {"status": "started"}
 
     except Exception as e:
-        print("Start error:", e)
-        return {"status": False, "error": str(e)}
+        return {"error": str(e)}
 
 
 # =========================
@@ -316,3 +323,46 @@ async def get_gcode(file: str):
     except Exception as e:
         print("GCODE fetch error:", e)
         return ""
+    
+# =========================
+# GET CURRENT PRINT STATUS (NEW 🔥)
+# =========================
+@router.get("/printer/status")
+async def get_print_status():
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(
+                f"{BASE_URL}/printer/objects/query",
+                params={
+                    "print_stats": "",
+                    "virtual_sdcard": ""
+                }
+            )
+
+        data = response.json()["result"]["status"]
+
+        print_stats = data.get("print_stats", {})
+        vsd = data.get("virtual_sdcard", {})
+
+        raw_state = print_stats.get("state", "idle")
+        ui_state = map_state(raw_state)
+
+        filename = print_stats.get("filename", "")
+
+        is_printing = raw_state in ["printing", "paused"]
+
+        return {
+            "is_printing": is_printing,
+            "state": ui_state,
+            "filename": filename,
+            "progress": (vsd.get("progress", 0) * 100),
+            "file_position": vsd.get("file_position", 0)
+        }
+
+    except Exception as e:
+        print("Status API error:", e)
+        return {
+            "is_printing": False,
+            "state": "Disconnected",
+            "filename": ""
+        }

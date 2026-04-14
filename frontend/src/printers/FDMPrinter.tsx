@@ -42,8 +42,12 @@ export default function FDM({ onConnectionChange }: { onConnectionChange?: (v: b
   const [gcodeLines, setGcodeLines] = useState<string[]>([])
   const [currentLine, setCurrentLine] = useState<number>(0)
   const gcodeRef = useRef<string[]>([])
+  const containerRef = useRef<HTMLDivElement | null>(null)
   const [startLine, setStartLine] = useState(0)
-
+  const [windowStart, setWindowStart] = useState(0)
+  const WINDOW_SIZE = 10
+  const hasLoadedRef = useRef(false)
+  const lastLineRef = useRef(-1)
   // =============================
   // FETCH FILES
   // =============================
@@ -61,6 +65,8 @@ export default function FDM({ onConnectionChange }: { onConnectionChange?: (v: b
       console.error("Failed to fetch printer files")
     }
   }
+  const executableLinesRef = useRef<number[]>([])
+
   const fetchGcode = async (filename: string) => {
     try {
       if (!filename || filename === "Select file...") return
@@ -73,10 +79,14 @@ export default function FDM({ onConnectionChange }: { onConnectionChange?: (v: b
       let text = await res.text()
       if (!text || text.length < 10) return
 
+      // =============================
       // 🔥 FIX ESCAPED NEWLINES
+      // =============================
       let lines = text.replace(/\\n/g, "\n").split("\n")
 
+      // =============================
       // 🔥 REMOVE THUMBNAIL BLOCK
+      // =============================
       const thumbStart = lines.findIndex(l => l.includes("thumbnail begin"))
       const thumbEnd = lines.findIndex(l => l.includes("thumbnail end"))
 
@@ -84,7 +94,9 @@ export default function FDM({ onConnectionChange }: { onConnectionChange?: (v: b
         lines.splice(thumbStart, thumbEnd - thumbStart + 1)
       }
 
-      // 🔥 REMOVE HEADER
+      // =============================
+      // 🔥 REMOVE HEADER (REAL START)
+      // =============================
       const startIdxRaw = lines.findIndex(line => {
         const clean = line.trim()
         if (!clean || clean.startsWith(";")) return false
@@ -95,11 +107,36 @@ export default function FDM({ onConnectionChange }: { onConnectionChange?: (v: b
         lines = lines.slice(startIdxRaw)
       }
 
-      // 🔥 LIMIT
-      lines = lines.slice(0, 2000)
-
+      // =============================
+      // 🔥 STORE FULL FILE
+      // =============================
       gcodeRef.current = lines
-      setGcodeLines(lines)
+
+      // =============================
+      // 🔥 BUILD EXECUTABLE LINE MAP (CRITICAL)
+      // ONLY REAL PRINTING MOVES
+      // =============================
+      executableLinesRef.current = lines
+        .map((line, idx) => ({ line, idx }))
+        .filter(({ line }) => {
+          const clean = line.trim()
+
+          // 🔥 ONLY extrusion moves (actual printing)
+          return clean.startsWith("G1") && /E-?\d+(\.\d+)?/.test(clean)
+        })
+        .map(({ idx }) => idx)
+
+      // =============================
+      // 🔥 INITIAL WINDOW (10 LINES)
+      // =============================
+      setWindowStart(0)
+      setGcodeLines(lines.slice(0, 10))
+
+      // =============================
+      // 🔥 FIND FIRST PRINT LINE
+      // =============================
+      const firstPrintIdx = executableLinesRef.current[0] ?? 0
+      setStartLine(firstPrintIdx)
 
     } catch (e) {
       console.error("GCODE ERROR:", e)
@@ -130,6 +167,9 @@ useEffect(() => {
 
       try {
         const data = JSON.parse(event.data)
+        if (data.active_file && gcodeRef.current.length === 0) {
+          fetchGcode(data.active_file)
+        }
         const isConnected = data.moonraker_connected ?? false
 
         setConnected(isConnected)
@@ -139,19 +179,36 @@ useEffect(() => {
         }
 
         setStatus(data.ui_state ?? "Idle")
+        const uiState = data.ui_state ?? "Idle"
+        setStatus(uiState)
+
+        // 🔥 FIX: when stopped → clear active file state
+        if ((uiState === "Idle" || uiState === "Stopped") && data.active_file === "") {
+          setSelectedFile("")
+          gcodeRef.current = []
+          setGcodeLines([])
+          setCurrentLine(0)
+          hasLoadedRef.current = false
+        }
 
         const s = data.raw_status
         if (!s) return
 
-        const activeFile = data.active_file ?? ""
-        setSelectedFile(prev => {
-          if (activeFile && activeFile !== prev) return activeFile
-          return prev
-        })
-        if (!activeFile && gcodeRef.current.length === 0) {
-          setGcodeLines([])
-          setCurrentLine(0)
+        const activeFile = data.active_file || data.raw_status?.print_stats?.filename || ""
+        if (activeFile) {
+          setSelectedFile(prev => {
+            if (prev !== activeFile) {
+              prevSelectedFileRef.current = ""
+              hasLoadedRef.current = false
+
+              fetchGcode(activeFile)
+
+              return activeFile
+            }
+            return prev
+          })
         }
+
 
         setNozzleTemp(s.extruder?.temperature ?? 0)
         setNozzleTarget(s.extruder?.target ?? 0)
@@ -172,26 +229,54 @@ useEffect(() => {
             velocity: s.motion_report?.live_velocity ?? 0
             }
           ].slice(-50))
+        // =============================
+        // 🔥 EXACT LIVE TRACKING (USING REAL PRINT LINES)
+        // =============================
+        const pos = data.raw_status?.virtual_sdcard?.file_position ?? 0
+        const total = data.raw_status?.virtual_sdcard?.file_size ?? 1
 
-        // ✅ 🔥 FIXED GCODE LINE TRACKING (NO STALE STATE ISSUE)
-        const pos = data.file_position ?? 0
+        const execLines = executableLinesRef.current
         const lines = gcodeRef.current
 
-        if (lines.length > 0) {
-          let charCount = 0
-          let line = 0
+        if (execLines.length > 0 && total > 0) {
+          const ratio = pos / total
 
-          for (let i = 0; i < lines.length; i++) {
-            charCount += lines[i].length + 1
-            if (charCount >= pos) {
-              line = i
-              break
-            }
+          // 🔥 map ONLY real printing lines
+          const execIndex = Math.min(
+            execLines.length - 1,
+            Math.floor(ratio * execLines.length)
+          )
+
+          let line = execLines[execIndex] ?? 0
+
+          // 🔥 safety clamp
+          if (line < 0) line = 0
+          if (line >= lines.length) line = lines.length - 1
+
+          // 🔥 update ONLY if changed
+          if (line !== lastLineRef.current) {
+            lastLineRef.current = line
+
+            setCurrentLine(line)
+
+            setGcodeLines(prev => {
+              // first load
+              if (prev.length === 0) {
+                setWindowStart(line)
+                return lines.slice(line, line + WINDOW_SIZE)
+              }
+
+              // 🔥 shift window only when needed
+              if (line >= windowStart + WINDOW_SIZE - 1) {
+                const newStart = windowStart + 1
+                setWindowStart(newStart)
+                return lines.slice(newStart, newStart + WINDOW_SIZE)
+              }
+
+              return prev
+            })
           }
-
-          setCurrentLine(line)
         }
-
       } catch (err) {
         console.error("WS error:", err)
       }
@@ -228,13 +313,82 @@ useEffect(() => {
     }
   }
 
-}, []) 
+}, [])
+
+// =============================
+// 🔥 CHECK RUNNING PRINT ON LOAD (FINAL FIXED)
+// =============================
+useEffect(() => {
+  const checkRunning = async () => {
+    try {
+      const res = await fetch("http://localhost:8000/printer/status")
+      if (!res.ok) return
+
+      const data = await res.json()
+
+      // 🔥 handle BOTH printing + paused
+      if (data.filename) {
+        console.log("Recovered running file:", data.filename)
+
+        // 🔥 force reload cleanly
+        prevSelectedFileRef.current = ""
+        hasLoadedRef.current = false
+
+        setSelectedFile(data.filename)
+
+        // 🔥 load gcode
+        await fetchGcode(data.filename)
+
+        // =============================
+        // 🔥 RESTORE CURRENT LINE (FIXED)
+        // =============================
+        const pos = data.file_position ?? 0
+        const lines = gcodeRef.current
+
+        if (lines.length > 0) {
+          const totalChars = lines.join("\n").length
+
+          if (totalChars > 0) {
+            const ratio = pos / totalChars
+
+            let line = Math.floor(ratio * lines.length)
+
+            // 🔥 safety clamp
+            if (line < 0) line = 0
+            if (line >= lines.length) line = lines.length - 1
+
+            setCurrentLine(line)
+
+            const start = Math.max(0, line - 25)
+            setWindowStart(start)
+            setGcodeLines(lines.slice(start, start + WINDOW_SIZE))
+          }
+        }
+      }
+
+    } catch (err) {
+      console.error("Status check failed:", err)
+    }
+  }
+
+  checkRunning()
+}, [])
+
 useEffect(() => {
   if (!selectedFile) return
-  if (selectedFile === prevSelectedFileRef.current) return  // 🔥 no double fetch
+
+  // 🔥 allow reload after refresh
+  if (selectedFile === prevSelectedFileRef.current && gcodeRef.current.length > 0) return
+
   prevSelectedFileRef.current = selectedFile
+  hasLoadedRef.current = true
+
   fetchGcode(selectedFile)
-  setCurrentLine(0)
+  const el = containerRef.current?.querySelector(".active-line")
+  el?.scrollIntoView({
+    block: "center",
+    behavior: "smooth"
+  })
 }, [selectedFile])
 
   // =============================
@@ -304,6 +458,14 @@ useEffect(() => {
 
     if (res.ok) {
       setActionMessage("Print Stopped ✓")
+
+      // 🔥 immediate UI reset (no wait for WS)
+      setSelectedFile("")
+      gcodeRef.current = []
+      setGcodeLines([])
+      setCurrentLine(0)
+      hasLoadedRef.current = false
+
       setTimeout(() => setActionMessage(""), 3000)
     }
   }
@@ -332,6 +494,7 @@ return (
         <select
           value={selectedFile}
           onChange={(e) => setSelectedFile(e.target.value)}
+          disabled={status === "Printing"}   // 🔥 ADD
           className="bg-slate-800 p-2 rounded w-full"
         >
           <option value="">Select file...</option>
@@ -346,7 +509,7 @@ return (
         {uploadMessage && <p className="text-green-400 text-xl mt-1">{uploadMessage}</p>}
 
         <div className="flex gap-2">
-          <button onClick={handleStart} className="flex-1 bg-green-600 p-2 rounded">▶</button>
+          <button onClick={handleStart} disabled={status === "Printing"} className="flex-1 bg-green-600 p-2 rounded" >▶</button>
           <button onClick={handlePause} className="flex-1 bg-yellow-500 p-2 rounded">⏸</button>
           <button onClick={handleStop} className="flex-1 bg-red-600 p-2 rounded">■</button>
         </div>
@@ -435,7 +598,7 @@ return (
       <p className="text-xs text-slate-400 -mb-2">
         File: {selectedFile || "None"}
       </p>
-      <div className="bg-[#0d1117] rounded border border-slate-700 w-full h-[280px] overflow-y-auto">
+      <div ref={containerRef} className="bg-[#0d1117] rounded border border-slate-700 w-full h-[280px] overflow-y-auto">
         <div className="sticky top-0 bg-[#0d1117] px-4 py-2 border-b border-slate-700">
           <h3 className="text-slate-300 text-sm font-semibold">G-Code</h3>
         </div>
@@ -446,7 +609,8 @@ return (
             </div>
           ) : (
             gcodeLines.map((line, i) => {
-              const isActive = i === currentLine
+              const globalIndex = windowStart + i
+              const isActive = globalIndex === currentLine
               const commentIdx = line.indexOf(";")
               const code = commentIdx >= 0 ? line.substring(0, commentIdx) : line
               const comment = commentIdx >= 0 ? line.substring(commentIdx) : ""
@@ -477,7 +641,7 @@ return (
                   key={i}
                   className={`flex gap-2 px-2 py-[1px] border-l-2 ${
                     isActive
-                      ? "bg-cyan-500/10 border-cyan-400"
+                      ? "bg-cyan-500/20 border-cyan-400 text-cyan-300 font-semibold active-line"
                       : "border-transparent hover:bg-slate-800/40"
                   }`}
                 >
