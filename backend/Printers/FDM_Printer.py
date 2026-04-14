@@ -6,6 +6,7 @@ from typing import Set
 import urllib.parse
 import os
 from dotenv import load_dotenv
+import urllib.parse
 
 load_dotenv()
 
@@ -15,7 +16,7 @@ if not PRINTER_IP:
 BASE_URL = f"http://{PRINTER_IP}:7125"
 PRINTER_STREAM_URL = f"http://{PRINTER_IP}:8080/?action=stream"
 
-POLL_INTERVAL = 5 
+POLL_INTERVAL = 5
 
 router = APIRouter()
 connected_clients: Set[WebSocket] = set()
@@ -291,10 +292,25 @@ def video_feed():
 @router.get("/gcode")
 async def get_gcode(file: str):
     try:
+        import urllib.parse
+
+        # 🔥 CLEAN FILE
+        clean_file = file.replace(".cache/", "").strip()
+
+        # 🔥 ENCODE
+        safe_file = urllib.parse.quote(clean_file)
+
+        print("REQUESTING GCODE:", safe_file)
+
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.get(
-                f"{BASE_URL}/server/files/gcodes/{file}"
+                f"{BASE_URL}/server/files/gcodes/{safe_file}"
             )
+
+        if not response.is_success:
+            print("Moonraker error:", response.text)
+            return ""
+
         return response.text
 
     except Exception as e:

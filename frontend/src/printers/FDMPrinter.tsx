@@ -41,6 +41,7 @@ export default function FDM({ onConnectionChange }: { onConnectionChange?: (v: b
 
   const [gcodeLines, setGcodeLines] = useState<string[]>([])
   const [currentLine, setCurrentLine] = useState<number>(0)
+  const gcodeRef = useRef<string[]>([])
 
   // =============================
   // FETCH FILES
@@ -61,30 +62,34 @@ export default function FDM({ onConnectionChange }: { onConnectionChange?: (v: b
   }
   const fetchGcode = async (filename: string) => {
     try {
-      const res = await fetch(`http://localhost:8000/gcode?file=${filename}`)
+      if (!filename || filename === "Select file...") return
 
-      // ❌ if backend fails → clear viewer
-      if (!res.ok) {
-        setGcodeLines([])
-        return
-      }
+      const cleanFile = filename.replace(".cache/", "")
+
+      const res = await fetch(`http://localhost:8000/gcode?file=${cleanFile}`)
+
+      if (!res.ok) return
 
       const text = await res.text()
 
-      // ❌ if error JSON comes as text → ignore
-      if (text.includes('"error"') || text.includes("Not Found")) {
-        setGcodeLines([])
-        return
-      }
+      if (!text || text.length < 10) return
 
-      setGcodeLines(text.split("\n"))
+      // 🔥 LIMIT FOR PERFORMANCE
+      const lines = text.split("\n").slice(0, 2000)
 
-    } catch {
-      setGcodeLines([])  // ✅ fallback
+      // 🔥 SAVE TO REF (FAST ACCESS)
+      gcodeRef.current = lines
+
+      // 🔥 UPDATE UI
+      setGcodeLines(lines)
+
+    } catch (e) {
+      console.error("GCODE ERROR:", e)
     }
   }
 
   const [fullscreen, setFullscreen] = useState(false)
+  const prevSelectedFileRef = useRef("")
 
 useEffect(() => {
   fetchFiles()
@@ -120,13 +125,12 @@ useEffect(() => {
         const s = data.raw_status
         if (!s) return
 
-        const currentFile = s.print_stats?.filename || ""
-        if (currentFile && currentFile !== selectedFile) {
-          setSelectedFile(currentFile)
-          fetchGcode(currentFile)
-        }
-        if (!currentFile) {
-          setSelectedFile("")
+        const activeFile = data.active_file ?? ""
+        setSelectedFile(prev => {
+          if (activeFile && activeFile !== prev) return activeFile
+          return prev
+        })
+        if (!activeFile && gcodeRef.current.length === 0) {
           setGcodeLines([])
           setCurrentLine(0)
         }
@@ -153,14 +157,19 @@ useEffect(() => {
 
         // ✅ 🔥 FIXED GCODE LINE TRACKING (NO STALE STATE ISSUE)
         const pos = data.file_position ?? 0
+        const lines = gcodeRef.current
 
-        if (gcodeLines.length > 0) {
-          const text = gcodeLines.join("\n")
+        if (lines.length > 0) {
+          let charCount = 0
+          let line = 0
 
-          // clamp to avoid overflow
-          const safePos = Math.min(pos, text.length)
-
-          const line = text.substring(0, safePos).split("\n").length - 1
+          for (let i = 0; i < lines.length; i++) {
+            charCount += lines[i].length + 1
+            if (charCount >= pos) {
+              line = i
+              break
+            }
+          }
 
           setCurrentLine(line)
         }
@@ -201,12 +210,13 @@ useEffect(() => {
     }
   }
 
-}, [gcodeLines]) 
+}, []) 
 useEffect(() => {
-  if (selectedFile) {
-    fetchGcode(selectedFile)
-    setCurrentLine(0) // reset highlight
-  }
+  if (!selectedFile) return
+  if (selectedFile === prevSelectedFileRef.current) return  // 🔥 no double fetch
+  prevSelectedFileRef.current = selectedFile
+  fetchGcode(selectedFile)
+  setCurrentLine(0)
 }, [selectedFile])
 
   // =============================
@@ -234,7 +244,6 @@ useEffect(() => {
 
       // ✅ ADD THIS
       setSelectedFile(file.name)
-      fetchGcode(file.name)
     }
   }
 
@@ -307,7 +316,7 @@ return (
           onChange={(e) => setSelectedFile(e.target.value)}
           className="bg-slate-800 p-2 rounded w-full"
         >
-          <option>Select file...</option>
+          <option value="">Select file...</option>
           {printerFiles.map((f, i) => <option key={i}>{f}</option>)}
         </select>
 
@@ -405,29 +414,66 @@ return (
       </div>
 
       {/* GCODE VIEWER */}
-      <p className="text-xs text-slate-400 mb-1">
+      <p className="text-xs text-slate-400 -mb-2">
         File: {selectedFile || "None"}
       </p>
-      <div className="bg-slate-800/5 p-4 rounded border border-slate-700 w-full h-[280px] overflow-y-auto">
-        <h3 className="mb-2">G-Code</h3>
-        <div className="text-sm font-mono space-y-1">
+      <div className="bg-[#0d1117] rounded border border-slate-700 w-full h-[280px] overflow-y-auto">
+        <div className="sticky top-0 bg-[#0d1117] px-4 py-2 border-b border-slate-700">
+          <h3 className="text-slate-300 text-sm font-semibold">G-Code</h3>
+        </div>
+        <div className="text-sm font-mono">
           {gcodeLines.length === 0 ? (
-            <div className="flex items-center justify-center h-full text-slate-500">
+            <div className="flex items-center justify-center h-40 text-slate-500">
               No G-code loaded
             </div>
           ) : (
-            gcodeLines.map((line, i) => (
-              <div
-                key={i}
-                className={`px-2 py-0.5 rounded ${
-                  i === currentLine
-                    ? "bg-green-500/20 text-green-400"
-                    : "text-slate-400"
-                }`}
-              >
-                {line}
-              </div>
-            ))
+            gcodeLines.map((line, i) => {
+              const isActive = i === currentLine
+              const commentIdx = line.indexOf(";")
+              const code = commentIdx >= 0 ? line.substring(0, commentIdx) : line
+              const comment = commentIdx >= 0 ? line.substring(commentIdx) : ""
+
+              const tokens = code.split(" ").filter(Boolean).map((token, ti) => {
+                if (/^[GM]\d+$/i.test(token)) {
+                  return <span key={ti} className="text-[#56b6c2]">{token} </span>
+                }
+                if (/^[A-Z]-?\d+(\.\d+)?$/i.test(token)) {
+                  const letter = token[0].toUpperCase()
+                  const value = token.slice(1)
+                  const colors: Record<string, string> = {
+                    X: "#e06c75", Y: "#e06c75", Z: "#e06c75",
+                    E: "#d19a66", F: "#c678dd", S: "#98c379", T: "#61afef"
+                  }
+                  return (
+                    <span key={ti}>
+                      <span className="text-[#abb2bf]">{letter}</span>
+                      <span style={{ color: colors[letter] || "#abb2bf" }}>{value} </span>
+                    </span>
+                  )
+                }
+                return <span key={ti} className="text-slate-400">{token} </span>
+              })
+
+              return (
+                <div
+                  key={i}
+                  className={`flex gap-2 px-2 py-[1px] border-l-2 ${
+                    isActive
+                      ? "bg-cyan-500/10 border-cyan-400"
+                      : "border-transparent hover:bg-slate-800/40"
+                  }`}
+                >
+                  <span className={`select-none w-8 text-right shrink-0 text-xs pt-[1px] ${
+                    isActive ? "text-cyan-400" : "text-slate-600"
+                  }`}>
+                    {i + 1}
+                  </span>
+                  <span>
+                    {line.trim() === "" ? <span>&nbsp;</span> : <>{tokens}{comment && <span className="text-slate-500 italic">{comment}</span>}</>}
+                  </span>
+                </div>
+              )
+            })
           )}
         </div>
       </div>
