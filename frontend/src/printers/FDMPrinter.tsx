@@ -45,7 +45,7 @@ export default function FDM({ onConnectionChange }: { onConnectionChange?: (v: b
   const containerRef = useRef<HTMLDivElement | null>(null)
   const [startLine, setStartLine] = useState(0)
   const [windowStart, setWindowStart] = useState(0)
-  const WINDOW_SIZE = 10
+  const WINDOW_SIZE = 50
   const hasLoadedRef = useRef(false)
   const lastLineRef = useRef(-1)
   // =============================
@@ -221,14 +221,23 @@ useEffect(() => {
 
         setProgress((s.virtual_sdcard?.progress ?? 0) * 100)
 
-        setMotionData(prev => [
-            ...prev,
-            {
-            time: prev.length > 0 ? prev[prev.length - 1].time + 1 : 0,
-            feed: (s.gcode_move?.speed ?? 0) / 60,
-            velocity: s.motion_report?.live_velocity ?? 0
-            }
-          ].slice(-50))
+        const isPrinting = data.ui_state === "Printing" || data.ui_state === "Paused"
+
+        const speed = (s.gcode_move?.speed ?? 0) / 60
+        const filteredSpeed = speed < 5 ? 0 : speed
+
+        setMotionData(prev => {
+          const newPoint = {
+            time: Date.now(),
+
+            // 🔥 USE FILTERED SPEED HERE
+            feed: isPrinting ? filteredSpeed : 0,
+
+            velocity: isPrinting ? (s.motion_report?.live_velocity ?? 0) : 0
+          }
+
+          return [...prev, newPoint].slice(-50)
+        })
         // =============================
         // 🔥 EXACT LIVE TRACKING (USING REAL PRINT LINES)
         // =============================
@@ -257,24 +266,14 @@ useEffect(() => {
           if (line !== lastLineRef.current) {
             lastLineRef.current = line
 
+            // 🔥 ALWAYS UPDATE UI (NO BLOCKING)
             setCurrentLine(line)
 
-            setGcodeLines(prev => {
-              // first load
-              if (prev.length === 0) {
-                setWindowStart(line)
-                return lines.slice(line, line + WINDOW_SIZE)
-              }
+            const start = Math.max(0, line)
+            const end = start + WINDOW_SIZE
 
-              // 🔥 shift window only when needed
-              if (line >= windowStart + WINDOW_SIZE - 1) {
-                const newStart = windowStart + 1
-                setWindowStart(newStart)
-                return lines.slice(newStart, newStart + WINDOW_SIZE)
-              }
-
-              return prev
-            })
+            setWindowStart(start)
+            setGcodeLines(lines.slice(start, end))
           }
         }
       } catch (err) {
@@ -572,7 +571,7 @@ return (
         <ResponsiveContainer width="100%" height="85%">
           <LineChart data={motionData}>
             <CartesianGrid stroke="#1e293b" vertical={false} />
-            <XAxis dataKey="time" stroke="#94a3b8" tick={{ fontSize: 10 }} domain={['dataMin', 'dataMax']} />
+            <XAxis dataKey="time" stroke="#94a3b8" tickFormatter={() => ""} domain={['dataMin', 'dataMax']} />
             <YAxis stroke="#94a3b8" tick={{ fontSize: 10 }} />
             <Tooltip contentStyle={{ backgroundColor: "#0f172a", border: "1px solid #334155" }} />
             <Line type="monotone" dataKey="feed" stroke="#a855f7" strokeWidth={2} dot={false} isAnimationActive={false} />
@@ -585,11 +584,11 @@ return (
         <h3 className="mb-2">Velocity</h3>
         <ResponsiveContainer width="100%" height="85%">
           <LineChart data={motionData}>
-            <CartesianGrid stroke="#334155" />
-            <XAxis dataKey="time" />
-            <YAxis />
-            <Tooltip />
-            <Line dataKey="velocity" stroke="#08eb5c" dot={false} />
+            <CartesianGrid stroke="#334155" vertical={false}/>
+            <XAxis dataKey="time" tickFormatter={() => ""} />
+            <YAxis stroke="#94a3b8" tick={{ fontSize: 10 }} />
+            <Tooltip contentStyle={{ backgroundColor: "#0f172a", border: "1px solid #334155" }} />
+            <Line type="monotone" dataKey="velocity" stroke="#12ff01" strokeWidth={2}  dot={false} isAnimationActive={false}  />
           </LineChart>
         </ResponsiveContainer>
       </div>
