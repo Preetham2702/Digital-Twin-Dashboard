@@ -31,6 +31,7 @@ export default function FDM({ onConnectionChange }: { onConnectionChange?: (v: b
   const [actionMessage, setActionMessage] = useState("")
 
   const [printerFiles, setPrinterFiles] = useState<string[]>([])
+  const [open, setOpen] = useState(false)
   const [selectedFile, setSelectedFile] = useState("")
 
   const socketRef = useRef<WebSocket | null>(null)
@@ -490,15 +491,31 @@ return (
           {actionMessage && <p className="text-green-400 text-sm mt-1">{actionMessage}</p>}
         </div>
 
-        <select
-          value={selectedFile}
-          onChange={(e) => setSelectedFile(e.target.value)}
-          disabled={status === "Printing"}   // 🔥 ADD
-          className="bg-slate-800 p-2 rounded w-full"
-        >
-          <option value="">Select file...</option>
-          {printerFiles.map((f, i) => <option key={i}>{f}</option>)}
-        </select>
+        <div className="relative w-full">
+          <div
+            className="bg-slate-800 p-2 rounded cursor-pointer"
+            onClick={() => setOpen(prev => !prev)}
+          >
+            {selectedFile || "Select file..."}
+          </div>
+
+          {open && (
+            <div className="absolute z-50 mt-1 w-full bg-slate-800 border border-slate-700 rounded max-h-[150px] overflow-y-auto">
+              {printerFiles.map((f, i) => (
+                <div
+                  key={i}
+                  onClick={() => {
+                    setSelectedFile(f)
+                    setOpen(false)
+                  }}
+                  className="px-2 py-1 hover:bg-slate-700 cursor-pointer text-sm"
+                >
+                  {f}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
 
         <input
           type="file"
