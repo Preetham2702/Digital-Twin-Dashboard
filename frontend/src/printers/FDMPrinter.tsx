@@ -45,7 +45,7 @@ export default function FDM({ onConnectionChange }: { onConnectionChange?: (v: b
   const containerRef = useRef<HTMLDivElement | null>(null)
   const [startLine, setStartLine] = useState(0)
   const [windowStart, setWindowStart] = useState(0)
-  const WINDOW_SIZE = 50
+  const WINDOW_SIZE = 20
   const hasLoadedRef = useRef(false)
   const lastLineRef = useRef(-1)
   // =============================
@@ -130,7 +130,7 @@ export default function FDM({ onConnectionChange }: { onConnectionChange?: (v: b
       // 🔥 INITIAL WINDOW (10 LINES)
       // =============================
       setWindowStart(0)
-      setGcodeLines(lines.slice(0, 10))
+      setGcodeLines(lines.slice(0, WINDOW_SIZE))
 
       // =============================
       // 🔥 FIND FIRST PRINT LINE
@@ -537,9 +537,9 @@ return (
       {/* TOP: XYZ + GAUGES */}
       <div className="flex gap-3 flex-wrap">
         {[{label:"X",value:x},{label:"Y",value:y},{label:"Z",value:z}].map(axis => (
-          <div key={axis.label} className="bg-slate-800/5 p-3 flex-1 w-[50px] rounded border border-slate-700 flex flex-col justify-center">
-            <p>{axis.label}</p>
-            <p className="text-green-400">{axis.value.toFixed(2)}</p>
+          <div key={axis.label} className="bg-slate-800/5 p-3 flex-1 w-[50px] rounded border border-slate-700 flex flex-col justify-center items-center">
+            <p className="text-lg font-semibold text-slate-300">{axis.label}</p>
+            <p className="text-2xl font-bold text-green-400">{axis.value.toFixed(2)}</p>
           </div>
         ))}
         <div className="bg-slate-800/5 p-3 flex-1 min-w-[200px] rounded border border-slate-700">
@@ -594,10 +594,10 @@ return (
       </div>
 
       {/* GCODE VIEWER */}
-      <p className="text-xs text-slate-400 -mb-2">
+      <p className="text-xs font-semibold text-slate-400 -mb-2">
         File: {selectedFile || "None"}
       </p>
-      <div ref={containerRef} className="bg-[#0d1117] rounded border border-slate-700 w-full h-[280px] overflow-y-auto">
+      <div ref={containerRef} className="bg-[#0d1117] rounded border border-slate-700 w-full h-[500px] overflow-y-auto">
         <div className="sticky top-0 bg-[#0d1117] px-4 py-2 border-b border-slate-700">
           <h3 className="text-slate-300 text-sm font-semibold">G-Code</h3>
         </div>
@@ -638,20 +638,34 @@ return (
               return (
                 <div
                   key={i}
-                  className={`flex gap-2 px-2 py-[1px] border-l-2 ${
+                  className={`flex px-2 py-[2px] border-b border-slate-800 ${
                     isActive
-                      ? "bg-cyan-500/20 border-cyan-400 text-cyan-300 font-semibold active-line"
-                      : "border-transparent hover:bg-slate-800/40"
+                      ? "bg-cyan-500/20 text-cyan-300 font-semibold active-line"
+                      : "hover:bg-slate-800/40"
                   }`}
                 >
-                  <span className={`select-none w-8 text-right shrink-0 text-xs pt-[1px] ${
-                    isActive ? "text-cyan-400" : "text-slate-600"
-                  }`}>
-                    {i + 1}
-                  </span>
-                  <span>
-                    {line.trim() === "" ? <span>&nbsp;</span> : <>{tokens}{comment && <span className="text-slate-500 italic">{comment}</span>}</>}
-                  </span>
+                  {/* 🔥 LINE NUMBER COLUMN */}
+                  <div
+                    className={`w-12 pr-2 text-right border-r border-slate-800 ${
+                      isActive ? "text-cyan-400" : "text-slate-500"
+                    }`}
+                  >
+                    {windowStart + i + 1}
+                  </div>
+
+                  {/* 🔥 GCODE COLUMN */}
+                  <div className="pl-2 flex-1 font-mono">
+                    {line.trim() === "" ? (
+                      <span>&nbsp;</span>
+                    ) : (
+                      <>
+                        {tokens}
+                        {comment && (
+                          <span className="text-slate-500 italic">{comment}</span>
+                        )}
+                      </>
+                    )}
+                  </div>
                 </div>
               )
             })
