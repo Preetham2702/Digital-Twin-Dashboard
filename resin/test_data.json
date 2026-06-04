@@ -1,0 +1,64 @@
+[
+  {
+    "timestamp": "2026-05-28 12:29:55",
+    "elapsed_seconds": 0.5,
+    "print": {
+      "filename": "",
+      "status": "IDLE",
+      "current_layer": 0,
+      "total_layers": 0,
+      "progress_percent": 0,
+      "current_ticks_ms": 0,
+      "total_ticks_ms": 0,
+      "remaining_time_ms": 0,
+      "remaining_time_min": 0,
+      "z_position_mm": null,
+      "error_number": 0,
+      "task_id": ""
+    },
+    "temperature": {
+      "uvled_c": 25.77,
+      "tank_c": 27,
+      "tank_target_c": 30
+    },
+    "machine_status": {
+      "status": "IDLE",
+      "heat_on": true,
+      "timelapse_on": true,
+      "print_screen_count": 79783,
+      "release_film_count": 11941,
+      "release_film_max": 60000
+    }
+  },
+  {
+    "timestamp": "2026-05-28 12:29:59",
+    "elapsed_seconds": 3.6,
+    "print": {
+      "filename": "",
+      "status": "IDLE",
+      "current_layer": 0,
+      "total_layers": 0,
+      "progress_percent": 0,
+      "current_ticks_ms": 0,
+      "total_ticks_ms": 0,
+      "remaining_time_ms": 0,
+      "remaining_time_min": 0,
+      "z_position_mm": null,
+      "error_number": 0,
+      "task_id": ""
+    },
+    "temperature": {
+      "uvled_c": 25.84,
+      "tank_c": 27,
+      "tank_target_c": 30
+    },
+    "machine_status": {
+      "status": "IDLE",
+      "heat_on": true,
+      "timelapse_on": true,
+      "print_screen_count": 79783,
+      "release_film_count": 11941,
+      "release_film_max": 60000
+    }
+  }
+]

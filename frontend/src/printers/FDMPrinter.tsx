@@ -229,7 +229,7 @@ useEffect(() => {
 
         setMotionData(prev => {
           const newPoint = {
-            time: Date.now(),
+            time: prev.length > 0 ? prev[prev.length - 1].time + 1 : 0,
 
             // 🔥 USE FILTERED SPEED HERE
             feed: isPrinting ? filteredSpeed : 0,
@@ -605,7 +605,7 @@ return (
             <XAxis dataKey="time" tickFormatter={() => ""} />
             <YAxis stroke="#94a3b8" tick={{ fontSize: 10 }} />
             <Tooltip contentStyle={{ backgroundColor: "#0f172a", border: "1px solid #334155" }} />
-            <Line type="monotone" dataKey="velocity" stroke="#12ff01" strokeWidth={2}  dot={false} isAnimationActive={false}  />
+            <Line type="monotone" dataKey="velocity" stroke="#71f441" strokeWidth={2}  dot={false} isAnimationActive={false}  />
           </LineChart>
         </ResponsiveContainer>
       </div>
