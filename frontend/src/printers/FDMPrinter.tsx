@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from "react"
 import SemiGauge from "../components/SemiGauge"
-import PrintPreview3D from "../components/PrintPreview3d"
-import { parseGcode3D, type Model3D } from "../utils/gcode3d"
+import PrintPreview3D, { type ColorMode } from "../components/PrintPreview3d"
+import { parseGcode3D, type Model3D, FEATURE_COLORS, FEATURE_LABELS } from "../utils/gcode3d"
 
 import {
   LineChart,
@@ -12,6 +12,14 @@ import {
   CartesianGrid,
   ResponsiveContainer
 } from "recharts"
+
+// 🟢 PREVIEW: set this to your printer's real bed size [X, Y, Z] in mm
+const BUILD_VOLUME: [number, number, number] = [256, 256, 256]
+
+// 🟢 PREVIEW: feature legend rows (skip index 0 = "Other")
+const FEATURE_LEGEND = FEATURE_LABELS
+  .map((l, i) => [FEATURE_COLORS[i], l] as [string, string])
+  .slice(1)
 
 export default function FDM({ onConnectionChange }: { onConnectionChange?: (v: boolean) => void }) {
 
@@ -55,6 +63,10 @@ export default function FDM({ onConnectionChange }: { onConnectionChange?: (v: b
   // 🟢 PREVIEW: parsed 3D toolpath model + toggle for the old text viewer
   const [model3d, setModel3d] = useState<Model3D | null>(null)
   const SHOW_GCODE_VIEWER = false // flip to true to bring the old G-code text viewer back
+
+  // 🟢 PREVIEW: view options
+  const [colorMode, setColorMode] = useState<ColorMode>("progress")
+  const [showTravel, setShowTravel] = useState(false)
 
   // 🟢 PREVIEW: track previous UI state so we only clear when a print actually ends
   const prevUiStateRef = useRef("")
@@ -655,29 +667,96 @@ return (
         File: {selectedFile || "None"}
       </p>
 
-      {/* 🟢 3D PRINT PREVIEW — grey/white skeleton, green = printed */}
+      {/* 🟢 3D PRINT PREVIEW */}
       <div className="bg-[#0d1117] rounded border border-slate-700 w-full h-[500px] overflow-hidden flex flex-col">
-        <div className="sticky top-0 bg-[#0d1117] px-4 py-2 border-b border-slate-700 flex justify-between items-center">
-          <h3 className="text-slate-300 text-sm font-semibold">Preview</h3>
-          <div className="flex items-center gap-3">
+        {/* header */}
+        <div className="sticky top-0 bg-[#0d1117] px-4 py-2 border-b border-slate-700">
+          <div className="flex justify-between items-center">
+            <h3 className="text-slate-300 text-sm font-semibold">Print Preview</h3>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={handleRefreshModel}
+                disabled={!selectedFile}
+                title="Reload model"
+                className="text-slate-400 hover:text-slate-200 disabled:opacity-40 text-sm"
+              >
+                ⟳ Refresh
+              </button>
+              <span className="text-green-400 text-sm font-semibold">{progress.toFixed(0)}%</span>
+            </div>
+          </div>
+
+          {/* toolbar: color mode + travels */}
+          <div className="flex items-center gap-2 mt-2 text-xs">
+            <div className="flex rounded overflow-hidden border border-slate-700">
+              {(["progress", "feature", "speed"] as const).map(m => (
+                <button
+                  key={m}
+                  onClick={() => setColorMode(m)}
+                  className={`px-2 py-1 capitalize ${
+                    colorMode === m ? "bg-slate-700 text-white" : "text-slate-400 hover:bg-slate-800"
+                  }`}
+                >
+                  {m}
+                </button>
+              ))}
+            </div>
             <button
-              onClick={handleRefreshModel}
-              disabled={!selectedFile}
-              title="Reload model"
-              className="text-slate-400 hover:text-slate-200 disabled:opacity-40 text-sm"
+              onClick={() => setShowTravel(v => !v)}
+              className={`px-2 py-1 rounded border border-slate-700 ${
+                showTravel ? "bg-slate-700 text-white" : "text-slate-400 hover:bg-slate-800"
+              }`}
             >
-              ⟳ Refresh
+              Travels
             </button>
-            <span className="text-green-400 text-sm font-semibold">{progress.toFixed(0)}%</span>
           </div>
         </div>
-        <div className="flex-1">
+
+        {/* canvas + overlays */}
+        <div className="flex-1 relative">
           <PrintPreview3D
             model={model3d}
             progress={progress}
+            buildVolume={BUILD_VOLUME}
+            toolhead={connected ? { x, y, z } : null}
+            colorMode={colorMode}
+            showTravel={showTravel}
             printedColor="#4ade80"
             skeletonColor="#e2e8f0"
           />
+
+          {/* HUD */}
+          <div className="absolute top-2 left-2 bg-[#0f172a]/85 border border-slate-700 rounded px-3 py-2 text-xs text-slate-300 pointer-events-none leading-5">
+            <div>Z <span className="text-green-400">{z.toFixed(2)} mm</span></div>
+            <div>Nozzle <span className="text-orange-400">{nozzleTemp.toFixed(0)}°C</span></div>
+            <div>Bed <span className="text-blue-400">{bedTemp.toFixed(0)}°C</span></div>
+          </div>
+
+          {/* feature legend */}
+          {colorMode === "feature" && (
+            <div className="absolute bottom-2 left-2 bg-[#0f172a]/85 border border-slate-700 rounded px-3 py-2 text-xs text-slate-300 pointer-events-none flex flex-col gap-1">
+              {FEATURE_LEGEND.map(([c, l]) => (
+                <div key={l} className="flex items-center gap-2">
+                  <span style={{ background: c }} className="inline-block w-3 h-1 rounded" />
+                  {l}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* speed legend */}
+          {colorMode === "speed" && (
+            <div className="absolute bottom-2 left-2 bg-[#0f172a]/85 border border-slate-700 rounded px-3 py-2 text-xs text-slate-300 pointer-events-none">
+              <div className="flex items-center gap-2">
+                <span className="text-blue-400">slow</span>
+                <span
+                  className="inline-block w-16 h-1 rounded"
+                  style={{ background: "linear-gradient(to right,#2680f0,#ef4444)" }}
+                />
+                <span className="text-red-400">fast</span>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
