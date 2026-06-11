@@ -193,12 +193,12 @@ def _sdcp_loop():
         _mainboard_id = mid
         ws_url = f"ws://{PRINTER_IP}:3030/websocket"
 
-        def make_cmd(cmd_id):
+        def make_cmd(cmd_id, data=None):
             return json.dumps({
                 "Id": uuid.uuid4().hex,
                 "Data": {
                     "Cmd": cmd_id,
-                    "Data": {},
+                    "Data": data or {},
                     "From": 0,
                     "MainboardID": _mainboard_id,
                     "RequestID": uuid.uuid4().hex,
@@ -213,6 +213,12 @@ def _sdcp_loop():
 
             for cmd in [0, 1]:
                 ws.send(make_cmd(cmd))
+                time.sleep(0.2)
+
+            # Enable timelapse so camera streams video
+            if CAMERA_URL:
+                ws.send(make_cmd(386, {"TimeLapseStatus": 1}))
+                print("[RESIN] Timelapse enabled for camera stream")
                 time.sleep(0.2)
 
             ws.settimeout(3)
@@ -292,6 +298,10 @@ async def startup_event():
     t = threading.Thread(target=_sdcp_loop, daemon=True)
     t.start()
     asyncio.create_task(_broadcast_loop())
+    if CAMERA_URL:
+        print(f"[RESIN] Starting camera snapshots from {CAMERA_URL}")
+        cam = threading.Thread(target=_snapshot_loop, daemon=True)
+        cam.start()
 
 
 # =============================
@@ -337,64 +347,59 @@ async def upload(file: UploadFile = File(...)):
 
 
 # =============================
-# CAMERA PREVIEW (RTSP → MJPEG)
+# CAMERA PREVIEW (SNAPSHOT MODE)
 # =============================
-def _ffmpeg_mjpeg_generator():
-    """Run FFmpeg to convert RTSP stream into JPEG frames, yield as multipart MJPEG."""
-    cmd = [
-        "ffmpeg",
-        "-i", CAMERA_URL,
-        "-f", "mjpeg",
-        "-q:v", "5",
-        "-r", "10",
-        "pipe:1",
-    ]
-    proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-    )
+_latest_frame = None
+_frame_lock = threading.Lock()
 
-    try:
-        buf = b""
-        while True:
-            chunk = proc.stdout.read(4096)
-            if not chunk:
-                break
-            buf += chunk
 
-            # Find complete JPEG frames (FFD8 start → FFD9 end)
-            while True:
-                start = buf.find(b"\xff\xd8")
-                if start < 0:
-                    buf = b""
-                    break
-                end = buf.find(b"\xff\xd9", start + 2)
-                if end < 0:
-                    # Keep from start marker onward, wait for more data
-                    buf = buf[start:]
-                    break
-                frame = buf[start:end + 2]
-                buf = buf[end + 2:]
-                yield (
-                    b"--frame\r\n"
-                    b"Content-Type: image/jpeg\r\n"
-                    b"Content-Length: " + str(len(frame)).encode() + b"\r\n\r\n"
-                    + frame + b"\r\n"
-                )
-    finally:
-        proc.kill()
-        proc.wait()
+def _snapshot_loop():
+    """Background thread: grab one JPEG frame every second via FFmpeg, store in memory."""
+    global _latest_frame
+    _frame_count = 0
+    while True:
+        try:
+            proc = subprocess.run(
+                [
+                    "ffmpeg", "-nostdin",
+                    "-i", CAMERA_URL,
+                    "-frames:v", "1",
+                    "-f", "image2",
+                    "-update", "1",
+                    "-q:v", "5",
+                    "pipe:1",
+                ],
+                capture_output=True,
+                timeout=10,
+            )
+            if proc.returncode == 0 and proc.stdout:
+                with _frame_lock:
+                    _latest_frame = proc.stdout
+                _frame_count += 1
+                if _frame_count == 1:
+                    print(f"[RESIN VIDEO] ✅ First frame captured ({len(proc.stdout)} bytes)")
+                elif _frame_count % 30 == 0:
+                    print(f"[RESIN VIDEO] ✅ Frame #{_frame_count} ({len(proc.stdout)} bytes)")
+            else:
+                stderr_msg = proc.stderr.decode(errors="replace")[-200:] if proc.stderr else "no stderr"
+                print(f"[RESIN VIDEO] ❌ FFmpeg returned {proc.returncode}: {stderr_msg}")
+        except subprocess.TimeoutExpired:
+            print("[RESIN VIDEO] ❌ Snapshot timed out — RTSP stream unreachable")
+        except Exception as e:
+            print(f"[RESIN VIDEO] ❌ Snapshot error: {e}")
+        time.sleep(1)
 
 
 @router.get("/preview")
 async def preview():
-    """Proxy RTSP camera stream as MJPEG for the browser."""
+    """Return the latest camera snapshot as JPEG."""
     if not CAMERA_URL:
         print("[RESIN] RESIN_CAMERA_URL not set in .env")
         return Response(status_code=503)
 
-    return StreamingResponse(
-        _ffmpeg_mjpeg_generator(),
-        media_type="multipart/x-mixed-replace; boundary=frame",
-    )
+    with _frame_lock:
+        frame = _latest_frame
+
+    if frame:
+        return Response(content=frame, media_type="image/jpeg")
+    return Response(status_code=503)

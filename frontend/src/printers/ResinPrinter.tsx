@@ -16,6 +16,16 @@ export default function Resin({ onConnectionChange }: { onConnectionChange?: (v:
 
   const [connected, setConnected] = useState(false)
   const [fullscreen, setFullscreen] = useState(false)
+  const [previewSrc, setPreviewSrc] = useState("")
+  const [cameraOk, setCameraOk] = useState(false)
+
+  // Refresh camera snapshot every second
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setPreviewSrc(`http://localhost:8000/preview?t=${Date.now()}`)
+    }, 1000)
+    return () => clearInterval(interval)
+  }, [])
   const [uvledTemp, setUvledTemp] = useState(0)
   const [tankTemp, setTankTemp] = useState(0)
   const [tankTarget, setTankTarget] = useState(0)
@@ -133,33 +143,20 @@ export default function Resin({ onConnectionChange }: { onConnectionChange?: (v:
         </div>
 
         <div
-          className="flex-1 bg-black border border-slate-600 rounded overflow-hidden cursor-pointer"
-          onClick={() => setFullscreen(true)}
+          className="flex-1 bg-black border border-slate-600 rounded overflow-hidden cursor-pointer relative"
+          onClick={() => cameraOk && setFullscreen(true)}
         >
           <img
-            src="http://localhost:8000/preview"
-            className="w-full h-full object-cover"
-            onError={(e) => {
-              const target = e.currentTarget
-              target.style.display = "none"
-              const parent = target.parentElement
-              if (parent) {
-                parent.innerHTML = `
-                  <div style="
-                    width:100%;
-                    height:100%;
-                    display:flex;
-                    align-items:center;
-                    justify-content:center;
-                    color:#64748b;
-                    font-size:14px;
-                  ">
-                    No Preview Available
-                  </div>
-                `
-              }
-            }}
+            src={previewSrc}
+            className={`w-full h-full object-cover ${cameraOk ? "" : "hidden"}`}
+            onLoad={() => setCameraOk(true)}
+            onError={() => setCameraOk(false)}
           />
+          {!cameraOk && (
+            <div className="absolute inset-0 flex items-center justify-center text-slate-500 text-sm">
+              No Preview Available
+            </div>
+          )}
         </div>
 
       </div>
@@ -177,7 +174,7 @@ export default function Resin({ onConnectionChange }: { onConnectionChange?: (v:
             ✕
           </button>
           <img
-            src="http://localhost:8000/preview"
+            src={previewSrc}
             className="max-w-full max-h-full object-contain"
           />
         </div>

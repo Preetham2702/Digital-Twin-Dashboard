@@ -1,5 +1,7 @@
 import { useEffect, useState, useRef } from "react"
 import SemiGauge from "../components/SemiGauge"
+import PrintPreview3D from "../components/PrintPreview3d"
+import { parseGcode3D, type Model3D } from "../utils/gcode3d"
 
 import {
   LineChart,
@@ -49,6 +51,14 @@ export default function FDM({ onConnectionChange }: { onConnectionChange?: (v: b
   const WINDOW_SIZE = 20
   const hasLoadedRef = useRef(false)
   const lastLineRef = useRef(-1)
+
+  // 🟢 PREVIEW: parsed 3D toolpath model + toggle for the old text viewer
+  const [model3d, setModel3d] = useState<Model3D | null>(null)
+  const SHOW_GCODE_VIEWER = false // flip to true to bring the old G-code text viewer back
+
+  // 🟢 PREVIEW: track previous UI state so we only clear when a print actually ends
+  const prevUiStateRef = useRef("")
+
   // =============================
   // FETCH FILES
   // =============================
@@ -57,9 +67,9 @@ export default function FDM({ onConnectionChange }: { onConnectionChange?: (v: b
       const res = await fetch("http://localhost:8000/files")
       if (res.ok) {
         const data = await res.json()
-  
+
         console.log("FILES RESPONSE:", data) // optional debug
-  
+
         setPrinterFiles(data.files || [])
       }
     } catch {
@@ -113,6 +123,9 @@ export default function FDM({ onConnectionChange }: { onConnectionChange?: (v: b
       // =============================
       gcodeRef.current = lines
 
+      // 🟢 PREVIEW: build the 3D toolpath model from the freshly loaded gcode
+      setModel3d(parseGcode3D(lines))
+
       // =============================
       // 🔥 BUILD EXECUTABLE LINE MAP (CRITICAL)
       // ONLY REAL PRINTING MOVES
@@ -146,6 +159,12 @@ export default function FDM({ onConnectionChange }: { onConnectionChange?: (v: b
 
   const [fullscreen, setFullscreen] = useState(false)
   const prevSelectedFileRef = useRef("")
+
+  // 🟢 PREVIEW: restore last selected file on page refresh
+  useEffect(() => {
+    const saved = localStorage.getItem("fdm_selected_file")
+    if (saved) setSelectedFile(saved)
+  }, [])
 
 useEffect(() => {
   fetchFiles()
@@ -183,14 +202,20 @@ useEffect(() => {
         const uiState = data.ui_state ?? "Idle"
         setStatus(uiState)
 
-        // 🔥 FIX: when stopped → clear active file state
-        if ((uiState === "Idle" || uiState === "Stopped") && data.active_file === "") {
+        // 🟢 PREVIEW: only clear when a print actually ENDS (was printing/paused → idle)
+        const wasActive =
+          prevUiStateRef.current === "Printing" || prevUiStateRef.current === "Paused"
+
+        if (wasActive && (uiState === "Idle" || uiState === "Stopped") && data.active_file === "") {
           setSelectedFile("")
           gcodeRef.current = []
           setGcodeLines([])
           setCurrentLine(0)
           hasLoadedRef.current = false
+          setModel3d(null)
+          localStorage.removeItem("fdm_selected_file")
         }
+        prevUiStateRef.current = uiState
 
         const s = data.raw_status
         if (!s) return
@@ -203,6 +228,7 @@ useEffect(() => {
               hasLoadedRef.current = false
 
               fetchGcode(activeFile)
+              localStorage.setItem("fdm_selected_file", activeFile)
 
               return activeFile
             }
@@ -335,6 +361,7 @@ useEffect(() => {
         hasLoadedRef.current = false
 
         setSelectedFile(data.filename)
+        localStorage.setItem("fdm_selected_file", data.filename)
 
         // 🔥 load gcode
         await fetchGcode(data.filename)
@@ -416,6 +443,7 @@ useEffect(() => {
 
       // ✅ ADD THIS
       setSelectedFile(file.name)
+      localStorage.setItem("fdm_selected_file", file.name)
     }
   }
 
@@ -465,11 +493,21 @@ useEffect(() => {
       setGcodeLines([])
       setCurrentLine(0)
       hasLoadedRef.current = false
+      setModel3d(null) // 🟢 PREVIEW: clear the model too
+      localStorage.removeItem("fdm_selected_file")
 
       setTimeout(() => setActionMessage(""), 3000)
     }
   }
-  const ip = import.meta.env.VITE_PRINTER_IP
+
+  // 🟢 PREVIEW: manually re-fetch + re-parse the current file
+  const handleRefreshModel = () => {
+    if (!selectedFile) return
+    fetchGcode(selectedFile)
+  }
+
+  const ip = import.meta.env.VITE_PRINTER_IP || "10.106.99.97"
+  console.log("[FDM] Using printer IP:", ip)
 
 return (
   <div className="h-[calc(100vh-64px)] p-3 grid grid-cols-[2fr_3fr] gap-2">
@@ -506,6 +544,7 @@ return (
                   key={i}
                   onClick={() => {
                     setSelectedFile(f)
+                    localStorage.setItem("fdm_selected_file", f)
                     setOpen(false)
                   }}
                   className="px-2 py-1 hover:bg-slate-700 cursor-pointer text-sm"
@@ -532,16 +571,17 @@ return (
       </div>
 
       {/* VIDEO */}
-      <div className="bg-black flex-1 rounded border border-slate-700 overflow-hidden min-h-[300px]">
-        {connected ? (
-          <img
-            src={`http://${ip}:8080/?action=stream`}
-            className="w-full h-full object-cover cursor-pointer"
-            onClick={() => setFullscreen(true)}   // 🔥 CLICK
-          />
-        ) : (
-          <div className="flex items-center justify-center h-full text-slate-500">
-            Live Streaming Video
+      <div className="bg-black flex-1 rounded border border-slate-700 overflow-hidden min-h-[300px] relative">
+        <img
+          src={`http://${ip}:8080/?action=stream`}
+          className="w-full h-full object-cover cursor-pointer"
+          onClick={() => setFullscreen(true)}
+          onLoad={() => console.log(`[FDM VIDEO] ✅ Stream connected to ${ip}:8080`)}
+          onError={() => console.log(`[FDM VIDEO] ❌ Failed to load stream from ${ip}:8080`)}
+        />
+        {!connected && (
+          <div className="absolute inset-0 flex items-center justify-center bg-black/70 text-slate-500">
+            Waiting for connection...
           </div>
         )}
       </div>
@@ -610,93 +650,131 @@ return (
         </ResponsiveContainer>
       </div>
 
-      {/* GCODE VIEWER */}
+      {/* FILE LABEL */}
       <p className="text-xs font-semibold text-slate-400 -mb-2">
         File: {selectedFile || "None"}
       </p>
-      <div ref={containerRef} className="bg-[#0d1117] rounded border border-slate-700 w-full h-[500px] overflow-y-auto">
-        <div className="sticky top-0 bg-[#0d1117] px-4 py-2 border-b border-slate-700">
-          <h3 className="text-slate-300 text-sm font-semibold">G-Code</h3>
+
+      {/* 🟢 3D PRINT PREVIEW — grey/white skeleton, green = printed */}
+      <div className="bg-[#0d1117] rounded border border-slate-700 w-full h-[500px] overflow-hidden flex flex-col">
+        <div className="sticky top-0 bg-[#0d1117] px-4 py-2 border-b border-slate-700 flex justify-between items-center">
+          <h3 className="text-slate-300 text-sm font-semibold">Preview</h3>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={handleRefreshModel}
+              disabled={!selectedFile}
+              title="Reload model"
+              className="text-slate-400 hover:text-slate-200 disabled:opacity-40 text-sm"
+            >
+              ⟳ Refresh
+            </button>
+            <span className="text-green-400 text-sm font-semibold">{progress.toFixed(0)}%</span>
+          </div>
         </div>
-        <div className="text-sm font-mono">
-          {gcodeLines.length === 0 ? (
-            <div className="flex items-center justify-center h-40 text-slate-500">
-              No G-code loaded
-            </div>
-          ) : (
-            gcodeLines.map((line, i) => {
-              const globalIndex = windowStart + i
-              const isActive = globalIndex === currentLine
-              const commentIdx = line.indexOf(";")
-              const code = commentIdx >= 0 ? line.substring(0, commentIdx) : line
-              const comment = commentIdx >= 0 ? line.substring(commentIdx) : ""
-
-              const tokens = code.split(" ").filter(Boolean).map((token, ti) => {
-                if (/^[GM]\d+$/i.test(token)) {
-                  return <span key={ti} className="text-[#56b6c2]">{token} </span>
-                }
-                if (/^[A-Z]-?\d+(\.\d+)?$/i.test(token)) {
-                  const letter = token[0].toUpperCase()
-                  const value = token.slice(1)
-                  const colors: Record<string, string> = {
-                    X: "#e06c75", Y: "#e06c75", Z: "#e06c75",
-                    E: "#d19a66", F: "#c678dd", S: "#98c379", T: "#61afef"
-                  }
-                  return (
-                    <span key={ti}>
-                      <span className="text-[#abb2bf]">{letter}</span>
-                      <span style={{ color: colors[letter] || "#abb2bf" }}>{value} </span>
-                    </span>
-                  )
-                }
-                return <span key={ti} className="text-slate-400">{token} </span>
-              })
-
-              return (
-                <div
-                  key={i}
-                  className={`flex px-2 py-[2px] border-b border-slate-800 ${
-                    isActive
-                      ? "bg-cyan-500/20 text-cyan-300 font-semibold active-line"
-                      : "hover:bg-slate-800/40"
-                  }`}
-                >
-                  {/* 🔥 LINE NUMBER COLUMN */}
-                  <div
-                    className={`w-12 pr-2 text-right border-r border-slate-800 ${
-                      isActive ? "text-cyan-400" : "text-slate-500"
-                    }`}
-                  >
-                    {windowStart + i + 1}
-                  </div>
-
-                  {/* 🔥 GCODE COLUMN */}
-                  <div className="pl-2 flex-1 font-mono">
-                    {line.trim() === "" ? (
-                      <span>&nbsp;</span>
-                    ) : (
-                      <>
-                        {tokens}
-                        {comment && (
-                          <span className="text-slate-500 italic">{comment}</span>
-                        )}
-                      </>
-                    )}
-                  </div>
-                </div>
-              )
-            })
-          )}
+        <div className="flex-1">
+          <PrintPreview3D
+            model={model3d}
+            progress={progress}
+            printedColor="#4ade80"
+            skeletonColor="#e2e8f0"
+          />
         </div>
       </div>
 
+      {/* 🟢 OLD G-CODE TEXT VIEWER — kept for reference, disabled.
+          Flip SHOW_GCODE_VIEWER (top of component) to true to bring it back. */}
+      {SHOW_GCODE_VIEWER && (
+        <div ref={containerRef} className="bg-[#0d1117] rounded border border-slate-700 w-full h-[500px] overflow-y-auto">
+          <div className="sticky top-0 bg-[#0d1117] px-4 py-2 border-b border-slate-700">
+            <h3 className="text-slate-300 text-sm font-semibold">G-Code</h3>
+          </div>
+          <div className="text-sm font-mono">
+            {gcodeLines.length === 0 ? (
+              <div className="flex items-center justify-center h-40 text-slate-500">
+                No G-code loaded
+              </div>
+            ) : (
+              gcodeLines.map((line, i) => {
+                const globalIndex = windowStart + i
+                const isActive = globalIndex === currentLine
+                const commentIdx = line.indexOf(";")
+                const code = commentIdx >= 0 ? line.substring(0, commentIdx) : line
+                const comment = commentIdx >= 0 ? line.substring(commentIdx) : ""
+
+                const tokens = code.split(" ").filter(Boolean).map((token, ti) => {
+                  if (/^[GM]\d+$/i.test(token)) {
+                    return <span key={ti} className="text-[#56b6c2]">{token} </span>
+                  }
+                  if (/^[A-Z]-?\d+(\.\d+)?$/i.test(token)) {
+                    const letter = token[0].toUpperCase()
+                    const value = token.slice(1)
+                    const colors: Record<string, string> = {
+                      X: "#e06c75", Y: "#e06c75", Z: "#e06c75",
+                      E: "#d19a66", F: "#c678dd", S: "#98c379", T: "#61afef"
+                    }
+                    return (
+                      <span key={ti}>
+                        <span className="text-[#abb2bf]">{letter}</span>
+                        <span style={{ color: colors[letter] || "#abb2bf" }}>{value} </span>
+                      </span>
+                    )
+                  }
+                  return <span key={ti} className="text-slate-400">{token} </span>
+                })
+
+                return (
+                  <div
+                    key={i}
+                    className={`flex px-2 py-[2px] border-b border-slate-800 ${
+                      isActive
+                        ? "bg-cyan-500/20 text-cyan-300 font-semibold active-line"
+                        : "hover:bg-slate-800/40"
+                    }`}
+                  >
+                    {/* 🔥 LINE NUMBER COLUMN */}
+                    <div
+                      className={`w-12 pr-2 text-right border-r border-slate-800 ${
+                        isActive ? "text-cyan-400" : "text-slate-500"
+                      }`}
+                    >
+                      {windowStart + i + 1}
+                    </div>
+
+                    {/* 🔥 GCODE COLUMN */}
+                    <div className="pl-2 flex-1 font-mono">
+                      {line.trim() === "" ? (
+                        <span>&nbsp;</span>
+                      ) : (
+                        <>
+                          {tokens}
+                          {comment && (
+                            <span className="text-slate-500 italic">{comment}</span>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  </div>
+                )
+              })
+            )}
+          </div>
+        </div>
+      )}
+
     </div>
+
     {/* 🔥 FULLSCREEN POPUP */}
     {fullscreen && (
       <div
-        className="fixed inset-0 bg-black/80 flex items-center justify-center z-50"
+        className="fixed inset-0 bg-black z-50 flex items-center justify-center cursor-pointer"
         onClick={() => setFullscreen(false)}
       >
+        <button
+          className="absolute top-4 right-4 text-white text-3xl z-50 hover:text-gray-400"
+          onClick={() => setFullscreen(false)}
+        >
+          ✕
+        </button>
         <img
           src={`http://${ip}:8080/?action=stream`}
           className="w-full h-full object-contain"
