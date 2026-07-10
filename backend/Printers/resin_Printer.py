@@ -40,7 +40,52 @@ layer_height_mm = None
 _mainboard_id = None
 
 
-# ── Get MainboardID via UDP (exact copy from logger) ──────────────────────────
+# ── Event set by the UDP beacon listener when the printer is seen ─────────────
+_printer_online_event = threading.Event()
+
+
+# ── Passive UDP beacon listener ───────────────────────────────────────────────
+def _udp_beacon_listener():
+    """
+    Listen on UDP port 3000 for the printer's own broadcast beacons.
+    Sets _printer_online_event when a packet from the configured IP arrives —
+    no active polling, no hammering the printer when it's offline.
+    """
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.settimeout(1.0)
+    try:
+        sock.bind(("", 3000))
+        print("[RESIN] UDP beacon listener started on port 3000")
+    except OSError as e:
+        print(f"[RESIN] Cannot bind UDP port 3000 ({e}) — active discovery only")
+        sock.close()
+        return
+
+    while True:
+        try:
+            data, (addr_ip, _) = sock.recvfrom(4096)
+            # Accept beacons from the configured printer IP (or any if not set)
+            if PRINTER_IP and addr_ip != PRINTER_IP:
+                continue
+            try:
+                info = json.loads(data)
+                if "Data" in info and "MainboardID" in info["Data"]:
+                    _printer_online_event.set()
+                    continue
+            except Exception:
+                pass
+            # Unknown packet from the right IP — still signal
+            if not PRINTER_IP or addr_ip == PRINTER_IP:
+                _printer_online_event.set()
+        except socket.timeout:
+            pass
+        except Exception as e:
+            print(f"[RESIN] UDP listener error: {e}")
+            time.sleep(1)
+
+
+# ── Get MainboardID via UDP (used after beacon detected, or on first connect) ──
 def get_mainboard_id():
     print(f"[RESIN] Discovering printer at {PRINTER_IP} ...")
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -187,7 +232,14 @@ def _sdcp_loop():
         if mid is None:
             with _lock:
                 state["printer_connected"] = False
-            time.sleep(5)
+            print("[RESIN] Printer offline — waiting for beacon (no polling) ...")
+            # Block until the UDP listener sees the printer broadcast its presence.
+            # Falls back gracefully if the listener couldn't bind (e.g. port in use).
+            _printer_online_event.clear()
+            _printer_online_event.wait()          # no busy-loop — wakes only on beacon
+            _printer_online_event.clear()
+            print("[RESIN] Beacon received — attempting connection ...")
+            time.sleep(0.5)                       # brief pause before re-querying
             continue
 
         _mainboard_id = mid
@@ -281,8 +333,13 @@ async def resin_ws(websocket: WebSocket):
 # PERIODIC BROADCASTER
 # =============================
 async def _broadcast_loop():
+    _last_snapshot: dict = {}
     while True:
-        await broadcast()
+        snapshot = flatten_state()
+        # Only push to clients when something actually changed
+        if snapshot != _last_snapshot:
+            _last_snapshot = snapshot
+            await broadcast()
         await asyncio.sleep(1)
 
 
@@ -295,6 +352,8 @@ async def startup_event():
         print("[RESIN] RESIN_PRINTER_IP not set in .env — resin printer disabled")
         return
     print(f"[RESIN] Starting with PRINTER_IP={PRINTER_IP}")
+    # Passive UDP beacon listener — wakes _sdcp_loop when printer comes online
+    threading.Thread(target=_udp_beacon_listener, daemon=True).start()
     t = threading.Thread(target=_sdcp_loop, daemon=True)
     t.start()
     asyncio.create_task(_broadcast_loop())

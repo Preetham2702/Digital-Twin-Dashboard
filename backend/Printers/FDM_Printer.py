@@ -7,6 +7,11 @@ import urllib.parse
 import os
 from dotenv import load_dotenv
 import urllib.parse
+from services.bed_detector import (
+    save_empty_bed,
+    check_bed_status
+)
+
 
 load_dotenv()
 
@@ -16,13 +21,24 @@ if not PRINTER_IP:
 BASE_URL = f"http://{PRINTER_IP}:7125"
 PRINTER_STREAM_URL = f"http://{PRINTER_IP}:8080/?action=stream"
 
-POLL_INTERVAL = 5
+POLL_INTERVAL = 1
 
 router = APIRouter()
 connected_clients: Set[WebSocket] = set()
 latest_status = {}
 moonraker_connected = False
 
+last_state = "Idle"
+bed_monitor_running = False
+idle_bed_alerted = False   # tracks whether the idle watcher has an active alert
+
+# =========================
+# BED MONITOR TUNING
+# =========================
+BED_SETTLE_SECONDS = 10       # wait after completion for the toolhead to park / bed to settle
+BED_CHECK_INTERVAL = 10       # seconds between camera checks (post-completion)
+BED_CONFIRM_CHECKS = 2        # consecutive "present" checks before alerting (~20s)
+IDLE_CHECK_INTERVAL = 5 * 60  # while idle, re-check the bed every 5 minutes
 
 # =========================
 # STATE MAPPING
@@ -45,17 +61,21 @@ def map_state(raw_state: str) -> str:
 # BROADCAST
 # =========================
 async def broadcast(data):
-    dead = []
+    if not connected_clients:
+        return
 
-    for ws in connected_clients:
+    async def _send(ws):
         try:
-            await ws.send_json(data)
-        except:
-            dead.append(ws)
+            await asyncio.wait_for(ws.send_json(data), timeout=2)
+            return None
+        except Exception:
+            return ws  # mark as dead
 
-    for d in dead:
-        connected_clients.remove(d)
-
+    # send to everyone at once — a stuck socket can't block the others
+    results = await asyncio.gather(*[_send(ws) for ws in list(connected_clients)])
+    for ws in results:
+        if ws is not None:
+            connected_clients.discard(ws)
 
 # =========================
 # WEBSOCKET
@@ -117,8 +137,25 @@ async def poll_printer():
 
                 raw_state = status.get("print_stats", {}).get("state", "idle")
                 ui_state = map_state(raw_state)
+                global last_state
+                global bed_monitor_running
+                global idle_bed_alerted
 
                 moonraker_connected = True
+                if (
+                    last_state == "Printing"
+                    and ui_state in ["Completed", "Stopped"]
+                    and not bed_monitor_running
+                ):
+                    asyncio.create_task(
+                        monitor_bed_until_empty()
+                    )
+
+                if ui_state == "Printing":
+                    bed_monitor_running = False
+                    idle_bed_alerted = False   # new print clears any stale idle alert
+
+                last_state = ui_state
 
                 latest_status = {
                     "moonraker_connected": True,
@@ -136,6 +173,7 @@ async def poll_printer():
                 print("⚠️ Network glitch")
 
                 await broadcast({
+                    **latest_status,
                     "moonraker_connected": False,
                     "ui_state": "Disconnected"
                 })
@@ -146,6 +184,7 @@ async def poll_printer():
 @router.on_event("startup")
 async def startup_event():
     asyncio.create_task(poll_printer())
+    asyncio.create_task(idle_bed_check_loop())
 
 
 # =========================
@@ -366,3 +405,131 @@ async def get_print_status():
             "state": "Disconnected",
             "filename": ""
         }
+
+# =========================
+# BED DETECTION ENDPOINTS
+# =========================
+# check_bed_status() / save_empty_bed() do blocking network + OpenCV work, so
+# run them off the event loop with asyncio.to_thread — a slow camera grab must
+# never stall the broadcast loop.
+
+@router.post("/capture-empty-bed")
+async def capture_empty_bed():
+    return await asyncio.to_thread(save_empty_bed)
+
+
+@router.get("/bed-status")
+async def bed_status():
+    return await asyncio.to_thread(check_bed_status)
+
+
+# Calibration helper: hit this empty-vs-loaded to read area_frac and tune
+# BED_MIN_AREA_FRAC. Same as /bed-status but named clearly for tuning.
+@router.get("/bed-debug")
+async def bed_debug():
+    return await asyncio.to_thread(check_bed_status)
+
+
+# =========================
+# BED MONITOR (runs after a print completes)
+# =========================
+async def monitor_bed_until_empty():
+    global bed_monitor_running
+    bed_monitor_running = True
+
+    # 1) let the machine settle after the print ends (toolhead parks, bed stops)
+    await asyncio.sleep(BED_SETTLE_SECONDS)
+
+    present_streak = 0
+    alerted = False
+
+    while bed_monitor_running:
+        try:
+            # run OpenCV off the event loop so it can't block broadcasts
+            result = await asyncio.to_thread(check_bed_status)
+
+            if not result.get("success"):
+                # camera / reference problem — wait and retry, don't alert
+                await asyncio.sleep(BED_CHECK_INTERVAL)
+                continue
+
+            if result["print_present"]:
+                present_streak += 1
+
+                # 3) confirmed present across ~20s -> alert ONCE
+                if present_streak >= BED_CONFIRM_CHECKS and not alerted:
+                    await broadcast({
+                        "event": "bed_status",
+                        "bed_status": "Print Not Removed",
+                        "area_frac": result.get("area_frac", 0),
+                        "changed_pixels": result.get("changed_pixels", 0),
+                    })
+                    alerted = True
+            else:
+                # bed is clear — announce only if we had alerted, then stop
+                if alerted:
+                    await broadcast({
+                        "event": "bed_status",
+                        "bed_status": "Bed Empty"
+                    })
+                bed_monitor_running = False
+                break
+
+        except Exception as e:
+            print("Bed monitor error:", e)
+
+        await asyncio.sleep(BED_CHECK_INTERVAL)
+
+
+# =========================
+# IDLE BED WATCHER (runs every 5 min while the machine is idle)
+# =========================
+# Catches a part left on the bed even when we never saw the print finish —
+# e.g. the backend was restarted, or a part was placed manually. Stays out of
+# the way while a print is running or while the post-completion monitor is active.
+async def idle_bed_check_loop():
+    global idle_bed_alerted
+
+    await asyncio.sleep(30)  # let startup settle before the first check
+
+    while True:
+        await asyncio.sleep(IDLE_CHECK_INTERVAL)
+
+        # Skip if a print is running, or the tight post-completion monitor owns
+        # the bed right now (avoids double-broadcasting).
+        if bed_monitor_running:
+            continue
+        if last_state not in ("Idle", "Completed", "Stopped"):
+            continue
+
+        try:
+            # debounce: two checks ~10s apart must agree before we act
+            r1 = await asyncio.to_thread(check_bed_status)
+            if not r1.get("success"):
+                continue
+
+            await asyncio.sleep(10)
+            r2 = await asyncio.to_thread(check_bed_status)
+            if not r2.get("success"):
+                continue
+
+            present = r1["print_present"] and r2["print_present"]
+
+            if present and not idle_bed_alerted:
+                await broadcast({
+                    "event": "bed_status",
+                    "bed_status": "Print Not Removed",
+                    "area_frac": r2.get("area_frac", 0),
+                    "changed_pixels": r2.get("changed_pixels", 0),
+                })
+                idle_bed_alerted = True
+
+            elif not present and idle_bed_alerted:
+                await broadcast({
+                    "event": "bed_status",
+                    "bed_status": "Bed Empty"
+                })
+                idle_bed_alerted = False
+
+        except Exception as e:
+            print("Idle bed check error:", e)
