@@ -1,5 +1,6 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { LineChart, Line, XAxis, YAxis, ResponsiveContainer } from "recharts";
+import type { MachineSummary } from "../types/machine";
 
 /* ── useWindowSize hook ─────────────────────────────────────── */
 function useWindowSize() {
@@ -21,7 +22,13 @@ function clamp(value: number, min: number, max: number) {
 /* ══════════════════════════════════════════════════════════════
    MAIN COMPONENT
 ══════════════════════════════════════════════════════════════ */
-export default function PocketNC({ onConnectionChange }: any) {
+export default function PocketNC({
+  onConnectionChange,
+  onSummary,
+}: {
+  onConnectionChange?: (v: boolean | null) => void
+  onSummary?: (s: MachineSummary) => void
+}) {
   const [status, setStatus] = useState<any>({});
   const { w, h } = useWindowSize();
   const [files, setFiles] = useState<string[]>([]);
@@ -33,15 +40,22 @@ export default function PocketNC({ onConnectionChange }: any) {
   const [feedData, setFeedData] = useState<{ time: number; feed: number }[]>([]);
   const [activeGcodes, setActiveGcodes] = useState("");
 
+  // Keep refs to callbacks so the WebSocket effect never needs to re-run
+  // when the parent passes new inline function references.
+  const onConnectionChangeRef = useRef(onConnectionChange);
+  const onSummaryRef = useRef(onSummary);
+  useEffect(() => { onConnectionChangeRef.current = onConnectionChange; });
+  useEffect(() => { onSummaryRef.current = onSummary; });
+
   useEffect(() => {
-    const ws = new WebSocket("ws://localhost:8000/ws/pocketnc");
+    let isMounted = true;
 
     fetch("http://localhost:8000/pocketnc/files")
       .then((res) => res.json())
       .then((d) => d.files && setFiles(d.files))
       .catch(console.log);
 
-    onConnectionChange?.(null);
+    onConnectionChangeRef.current?.(null);
 
     const fetchGcode = (file: string) => {
       if (!file) return;
@@ -51,54 +65,70 @@ export default function PocketNC({ onConnectionChange }: any) {
         .catch(console.log);
     };
 
-    ws.onmessage = (e) => {
-      const d = JSON.parse(e.data);
+    const connect = () => {
+      if (!isMounted) return;
 
-      onConnectionChange?.(d?.connected ?? false);
+      const ws = new WebSocket("ws://localhost:8000/ws/pocketnc");
 
-      if (d?.raw_status) {
-        const s = d.raw_status;
+      ws.onmessage = (e) => {
+        if (!isMounted) return;
+        const d = JSON.parse(e.data);
 
-        setStatus(s);
-        setActiveGcodes(s?.active_gcodes || "");
+        onConnectionChangeRef.current?.(d?.connected ?? false);
 
-        const line = s?.current_line || 0;
-        const file = s?.current_file || "";
+        if (d?.raw_status) {
+          const s = d.raw_status;
+          const isConnected = d?.connected ?? false;
+          const isRunning = s?.interp_state === 2;
 
-        setCurrentLine(line);
+          onSummaryRef.current?.({
+            status: isConnected ? (isRunning ? "running" : "idle") : "offline",
+            progress: null,
+            temps: [
+              { label: "Spindle", value: s?.spindle_speed ?? null, unit: " RPM" },
+            ],
+          });
 
-        setCurrentFile((prev) => {
-          if (file && prev !== file) {
-            fetchGcode(file);  
-          }
-          return file;
-        });
+          setStatus(s);
+          setActiveGcodes(s?.active_gcodes || "");
 
-        const sValue = d?.raw_status?.s_value ?? 0;
-        const fValue = d?.raw_status?.f_value ?? 0;
-        setRpmData(prev => {
-          const updated = [
-            ...prev,
-            { time: Date.now(), rpm: sValue }
-          ];
-          return updated.slice(-50);
-        });
+          const line = s?.current_line || 0;
+          const file = s?.current_file || "";
 
-        setFeedData(prev => {
-          const updated = [
-            ...prev,
-            { time: Date.now(), feed: fValue }
-          ];
-          return updated.slice(-50);
-        });
-      }
+          setCurrentLine(line);
+
+          setCurrentFile((prev) => {
+            if (file && prev !== file) {
+              fetchGcode(file);
+            }
+            return file;
+          });
+
+          const sValue = d?.raw_status?.s_value ?? 0;
+          const fValue = d?.raw_status?.f_value ?? 0;
+          setRpmData(prev => [...prev, { time: Date.now(), rpm: sValue }].slice(-50));
+          setFeedData(prev => [...prev, { time: Date.now(), feed: fValue }].slice(-50));
+        }
+      };
+
+      ws.onclose = () => {
+        if (!isMounted) return;
+        onConnectionChangeRef.current?.(false);
+        // No auto-reconnect — PocketNC connects via ethernet manually.
+      };
+
+      ws.onerror = () => {
+        if (!isMounted) return;
+        onConnectionChangeRef.current?.(false);
+      };
     };
 
-    ws.onclose = () => onConnectionChange?.(false);
-    ws.onerror = () => onConnectionChange?.(false);
+    connect();
 
-    return () => ws.close();
-  }, [onConnectionChange]);
+    return () => {
+      isMounted = false;
+    };
+  }, []); // ← empty deps: runs once on mount, refs keep callbacks current
   const position = status?.toolhead?.position ?? [0, 0, 0, 0, 0];
 
   const spindle = status?.spindle_speed || 0;
@@ -310,10 +340,10 @@ export default function PocketNC({ onConnectionChange }: any) {
         </div>
 
         <div
-          className="rounded border border-slate-600 flex items-center justify-center"
+          className="flex-1 rounded border border-slate-700 overflow-hidden min-h-[300px] relative"
           style={{ background: "#0f172a", height: 600, flexShrink: 0 }}
         >
-          <span className="text-gray-600" style={{ fontSize: fontSize * 0.82 }}>
+          <span className="absolute inset-0 flex items-center justify-center bg-black/70 text-slate-500">
             Live Streaming
           </span>
         </div>

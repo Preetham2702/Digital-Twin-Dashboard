@@ -1,7 +1,11 @@
-import { useEffect, useState, useRef } from "react"
+import { useEffect, useState, useRef, useMemo } from "react"
 import SemiGauge from "../components/SemiGauge"
 import PrintPreview3D, { type ColorMode } from "../components/PrintPreview3d"
-import { parseGcode3D, type Model3D, FEATURE_COLORS, FEATURE_LABELS } from "../utils/gcode3d"
+import { parseGcode3D, type Model3D, FEATURE_COLORS, FEATURE_LABELS } from "../utils/Gcode3d.ts"
+import ConfirmDialog from "../components/ConfirmDialog"
+import ConnectionOverlay from "../components/ConnectionOverlay"
+import BedAlert from "../components/bedalert"
+import type { MachineSummary } from "../types/machine"
 
 import {
   LineChart,
@@ -21,24 +25,90 @@ const FEATURE_LEGEND = FEATURE_LABELS
   .map((l, i) => [FEATURE_COLORS[i], l] as [string, string])
   .slice(1)
 
-export default function FDM({ onConnectionChange }: { onConnectionChange?: (v: boolean) => void }) {
+// 🟢 CACHE: keys + limits for surviving a refresh without the "disconnected" flash.
+const SNAP_KEY = "fdm_snapshot"                 // last-known telemetry (localStorage)
+const SNAP_MAX_AGE = 6 * 60 * 60 * 1000         // ignore snapshots older than 6h
+const GCODE_CACHE_PREFIX = "fdm_gcode:"         // raw g-code text per file (sessionStorage)
+const GCODE_CACHE_MAX = 3 * 1024 * 1024         // don't cache files larger than ~3MB
+
+type FdmSnapshot = {
+  status: string
+  progress: number
+  nozzleTemp: number
+  nozzleTarget: number
+  bedTemp: number
+  bedTarget: number
+  x: number
+  y: number
+  z: number
+  ts: number
+}
+
+// Read the last cached snapshot (or null if missing / too old / unparseable).
+function loadFdmSnap(): FdmSnapshot | null {
+  try {
+    const raw = localStorage.getItem(SNAP_KEY)
+    if (!raw) return null
+    const s = JSON.parse(raw) as FdmSnapshot
+    if (!s.ts || Date.now() - s.ts > SNAP_MAX_AGE) return null
+    return s
+  } catch {
+    return null
+  }
+}
+
+export default function FDM({
+  onConnectionChange,
+  onSummary,
+}: {
+  onConnectionChange?: (v: boolean) => void
+  onSummary?: (s: MachineSummary) => void
+}) {
+
+  // 🟢 CACHE: hydrate from the last snapshot so a refresh paints last-known
+  // values immediately instead of flashing "disconnected" + zeros. `connected`
+  // intentionally stays false until a real live message confirms the link.
+  const snap0 = useMemo(loadFdmSnap, [])
 
   const [connected, setConnected] = useState(false)
 
-  const [status, setStatus] = useState("Idle")
-  const [progress, setProgress] = useState(0)
+  // 🟠 BED ALERT: true while a finished print is still detected on the bed.
+  const [bedAlert, setBedAlert] = useState(false)
 
-  const [nozzleTemp, setNozzleTemp] = useState(0)
-  const [nozzleTarget, setNozzleTarget] = useState(0)
-  const [bedTemp, setBedTemp] = useState(0)
-  const [bedTarget, setBedTarget] = useState(0)
+  // 💡 LIGHT: machine case-light on/off state.
+  const [lightOn, setLightOn] = useState(false)
 
-  const [x, setX] = useState(0)
-  const [y, setY] = useState(0)
-  const [z, setZ] = useState(0)
+  const [status, setStatus] = useState(snap0?.status ?? "Idle")
+  const [progress, setProgress] = useState(snap0?.progress ?? 0)
+
+  const [nozzleTemp, setNozzleTemp] = useState(snap0?.nozzleTemp ?? 0)
+  const [nozzleTarget, setNozzleTarget] = useState(snap0?.nozzleTarget ?? 0)
+  const [bedTemp, setBedTemp] = useState(snap0?.bedTemp ?? 0)
+  const [bedTarget, setBedTarget] = useState(snap0?.bedTarget ?? 0)
+
+  const [x, setX] = useState(snap0?.x ?? 0)
+  const [y, setY] = useState(snap0?.y ?? 0)
+  const [z, setZ] = useState(snap0?.z ?? 0)
+
+  // 🟢 SPINNER: short grace window so a normal refresh (printer actually fine)
+  // doesn't flash the spinner before the first live message lands. If there's
+  // no cached snapshot to show, allow the spinner immediately.
+  const [graceOver, setGraceOver] = useState(() => !snap0)
+  useEffect(() => {
+    if (graceOver) return
+    const t = setTimeout(() => setGraceOver(true), 1200)
+    return () => clearTimeout(t)
+  }, [graceOver])
+
+  // 🟢 CACHE: guards a concurrent first-load race so the same file isn't
+  // fetched/parsed by all three call sites at once.
+  const loadingFileRef = useRef<string | null>(null)
 
   const [uploadMessage, setUploadMessage] = useState("")
   const [actionMessage, setActionMessage] = useState("")
+
+  // 🔥 which action is awaiting confirmation (replaces window.confirm)
+  const [confirmAction, setConfirmAction] = useState<null | "start" | "pause" | "stop">(null)
 
   const [printerFiles, setPrinterFiles] = useState<string[]>([])
   const [open, setOpen] = useState(false)
@@ -96,11 +166,39 @@ export default function FDM({ onConnectionChange }: { onConnectionChange?: (v: b
 
       const cleanFile = filename.replace(".cache/", "")
 
-      const res = await fetch(`http://localhost:8000/gcode?file=${cleanFile}`)
-      if (!res.ok) return
+      // 🟢 CACHE: dedupe the concurrent first-load race (WS msg + checkRunning +
+      // selectedFile effect can all fire before any completes).
+      if (loadingFileRef.current === cleanFile) return
+      loadingFileRef.current = cleanFile
 
-      let text = await res.text()
-      if (!text || text.length < 10) return
+      try {
+        // 🟢 CACHE: try the in-tab raw-text cache first — skips the network
+        // download entirely on refresh. We still parse locally (fast).
+        const cacheKey = `${GCODE_CACHE_PREFIX}${cleanFile}`
+        let text = ""
+        try {
+          text = sessionStorage.getItem(cacheKey) || ""
+        } catch {
+          text = ""
+        }
+
+        if (!text) {
+          const res = await fetch(`http://localhost:8000/gcode?file=${cleanFile}`)
+          if (!res.ok) return
+
+          text = await res.text()
+          if (!text || text.length < 10) return
+
+          // Only cache reasonably sized files (localStorage/sessionStorage cap
+          // is ~5MB per origin — a huge file would evict everything else).
+          if (text.length <= GCODE_CACHE_MAX) {
+            try {
+              sessionStorage.setItem(cacheKey, text)
+            } catch {
+              /* quota — fine, we just re-fetch next time */
+            }
+          }
+        }
 
       // =============================
       // 🔥 FIX ESCAPED NEWLINES
@@ -164,6 +262,12 @@ export default function FDM({ onConnectionChange }: { onConnectionChange?: (v: b
       const firstPrintIdx = executableLinesRef.current[0] ?? 0
       setStartLine(firstPrintIdx)
 
+      } finally {
+        // 🟢 CACHE: release the dedupe lock so a later refresh/Refresh-button
+        // press can re-fetch this file.
+        loadingFileRef.current = null
+      }
+
     } catch (e) {
       console.error("GCODE ERROR:", e)
     }
@@ -176,6 +280,23 @@ export default function FDM({ onConnectionChange }: { onConnectionChange?: (v: b
   useEffect(() => {
     const saved = localStorage.getItem("fdm_selected_file")
     if (saved) setSelectedFile(saved)
+  }, [])
+
+  // 🟠 BED ALERT: on mount, re-check bed status so a browser refresh doesn't
+  // lose an active "print not removed" alert. Runs one live check on the server.
+  useEffect(() => {
+    fetch("http://localhost:8000/bed-status")
+      .then(r => r.json())
+      .then(d => { if (d.success && d.print_present) setBedAlert(true) })
+      .catch(() => {})
+  }, [])
+
+  // 💡 LIGHT: sync the button with the printer's real light state on mount.
+  useEffect(() => {
+    fetch("http://localhost:8000/light-status")
+      .then(r => r.json())
+      .then(d => { if (typeof d.on === "boolean") setLightOn(d.on) })
+      .catch(() => {})
   }, [])
 
 useEffect(() => {
@@ -199,6 +320,16 @@ useEffect(() => {
 
       try {
         const data = JSON.parse(event.data)
+
+        // 🟠 BED ALERT: these events carry no telemetry payload — handle and
+        // return BEFORE the code below reads moonraker_connected (which would
+        // otherwise flip the UI to "disconnected").
+        if (data.event === "bed_status") {
+          if (data.bed_status === "Print Not Removed") setBedAlert(true)
+          else if (data.bed_status === "Bed Empty") setBedAlert(false)
+          return
+        }
+
         if (data.active_file && gcodeRef.current.length === 0) {
           fetchGcode(data.active_file)
         }
@@ -258,9 +389,47 @@ useEffect(() => {
         setY(s.toolhead?.position?.[1] ?? 0)
         setZ(s.toolhead?.position?.[2] ?? 0)
 
-        setProgress((s.virtual_sdcard?.progress ?? 0) * 100)
+        // 💡 LIGHT: keep the button in sync if the pin state is reported.
+        const pinVal = s["output_pin caselight"]?.value
+        if (typeof pinVal === "number") setLightOn(pinVal > 0)
+
+        const progressPct = (s.virtual_sdcard?.progress ?? 0) * 100
+        setProgress(progressPct)
+
+        // 🟢 CACHE: stash last-known telemetry so a refresh can paint instantly.
+        try {
+          localStorage.setItem(SNAP_KEY, JSON.stringify({
+            status: uiState,
+            progress: progressPct,
+            nozzleTemp: s.extruder?.temperature ?? 0,
+            nozzleTarget: s.extruder?.target ?? 0,
+            bedTemp: s.heater_bed?.temperature ?? 0,
+            bedTarget: s.heater_bed?.target ?? 0,
+            x: s.toolhead?.position?.[0] ?? 0,
+            y: s.toolhead?.position?.[1] ?? 0,
+            z: s.toolhead?.position?.[2] ?? 0,
+            ts: Date.now(),
+          } as FdmSnapshot))
+        } catch {
+          /* quota — ignore */
+        }
 
         const isPrinting = data.ui_state === "Printing" || data.ui_state === "Paused"
+
+        onSummary?.({
+          status: isConnected
+            ? isPrinting
+              ? "running"
+              : uiState === "Fault"
+              ? "fault"
+              : "idle"
+            : "offline",
+          progress: isPrinting ? progressPct : null,
+          temps: [
+            { label: "Nozzle", value: s.extruder?.temperature ?? null },
+            { label: "Bed", value: s.heater_bed?.temperature ?? null },
+          ],
+        })
 
         const speed = (s.gcode_move?.speed ?? 0) / 60
         const filteredSpeed = speed < 5 ? 0 : speed
@@ -431,7 +600,7 @@ useEffect(() => {
 }, [selectedFile])
 
   // =============================
-  // ACTIONS (UNCHANGED)
+  // ACTIONS
   // =============================
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!connected) return
@@ -459,11 +628,41 @@ useEffect(() => {
     }
   }
 
-  const handleStart = async () => {
-    if (!connected) return
-    if (!selectedFile) return alert("Please select a file")
-    if (!window.confirm("Start print?")) return
+  // 💡 LIGHT: optimistic toggle; revert if the request fails.
+  const toggleLight = async () => {
+    const next = !lightOn
+    setLightOn(next)
+    try {
+      const res = await fetch(`http://localhost:8000/light?on=${next}`, { method: "POST" })
+      if (!res.ok) setLightOn(!next)
+    } catch {
+      setLightOn(!next)
+    }
+  }
 
+  // 🔥 Buttons now OPEN the in-UI confirm dialog instead of window.confirm.
+  const requestStart = () => {
+    if (!connected) return
+    if (!selectedFile) {
+      setActionMessage("Please select a file")
+      setTimeout(() => setActionMessage(""), 3000)
+      return
+    }
+    setConfirmAction("start")
+  }
+
+  const requestPause = () => {
+    if (!connected) return
+    setConfirmAction("pause")
+  }
+
+  const requestStop = () => {
+    if (!connected) return
+    setConfirmAction("stop")
+  }
+
+  // 🔥 The actual API calls — run only after the dialog is confirmed.
+  const doStart = async () => {
     const res = await fetch(`http://localhost:8000/start?filename=${encodeURIComponent(selectedFile)}`, {
       method: "POST",
     })
@@ -474,10 +673,7 @@ useEffect(() => {
     }
   }
 
-  const handlePause = async () => {
-    if (!connected) return
-    if (!window.confirm("Pause print?")) return
-
+  const doPause = async () => {
     const res = await fetch("http://localhost:8000/pause", {
       method: "POST",
     })
@@ -488,10 +684,7 @@ useEffect(() => {
     }
   }
 
-  const handleStop = async () => {
-    if (!connected) return
-    if (!window.confirm("Stop print?")) return
-
+  const doStop = async () => {
     const res = await fetch("http://localhost:8000/stop", {
       method: "POST",
     })
@@ -512,6 +705,28 @@ useEffect(() => {
     }
   }
 
+  // 🔥 One shared dialog config, keyed by the pending action.
+  const CONFIRM_META = {
+    start: {
+      title: "Start print?",
+      message: "This will begin printing the selected file.",
+      label: "Start",
+      run: doStart,
+    },
+    pause: {
+      title: "Pause print?",
+      message: "The print will pause and can be resumed later.",
+      label: "Pause",
+      run: doPause,
+    },
+    stop: {
+      title: "Stop print?",
+      message: "This cancels the current print and can’t be undone.",
+      label: "Stop",
+      run: doStop,
+    },
+  } as const
+
   // 🟢 PREVIEW: manually re-fetch + re-parse the current file
   const handleRefreshModel = () => {
     if (!selectedFile) return
@@ -522,23 +737,54 @@ useEffect(() => {
   console.log("[FDM] Using printer IP:", ip)
 
 return (
-  <div className="h-[calc(100vh-64px)] p-3 grid grid-cols-[2fr_3fr] gap-2">
+  <div className="relative h-[calc(100vh-64px)] p-3 grid grid-cols-[2fr_3fr] gap-2">
 
-    {!connected && (
-      <div className="absolute top-0 left-0 w-full text-white text-center py-1 font-semibold z-200">
-        ⚠️ FDM Disconnected
+    {/* 🟠 BED ALERT: full-width banner across both columns when a finished
+        print is still on the bed. Auto-dismisses when the bed is cleared. */}
+    {bedAlert && (
+      <div className="col-span-2">
+        <BedAlert
+          visible
+          filename={selectedFile}
+          onAcknowledge={() => setBedAlert(false)}
+          onDismiss={() => setBedAlert(false)}
+        />
       </div>
     )}
+
+    {/* 🟢 SPINNER: backend lost the printer — show a centered loader. The grace
+        gate keeps it from flashing on a normal refresh. */}
+    {!connected && graceOver && <ConnectionOverlay message="Waiting for connection" />}
 
     {/* LEFT COLUMN */}
     <div className="flex flex-col gap-4 min-w-0">
 
       {/* CONTROLS */}
       <div className="bg-slate-800/5 p-4 flex flex-col gap-4 rounded border border-slate-700">
-        <div>
-          <p className="text-xl">Status: <span className="text-green-400 font-semibold">{status}</span></p>
-          <p className="text-xl">Progress: {progress.toFixed(2)}%</p>
-          {actionMessage && <p className="text-green-400 text-sm mt-1">{actionMessage}</p>}
+        <div className="flex justify-between items-start gap-3">
+          <div>
+            <p className="text-xl">Status: <span className="text-green-400 font-semibold">{status}</span></p>
+            <p className="text-xl">Progress: {progress.toFixed(2)}%</p>
+            {actionMessage && <p className="text-green-400 text-sm mt-1">{actionMessage}</p>}
+          </div>
+
+          {/* 💡 LIGHT: on/off toggle, top-right of the status box */}
+          <button
+            onClick={toggleLight}
+            title={lightOn ? "Turn light off" : "Turn light on"}
+            className={`shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded text-sm font-medium border transition-colors ${
+              lightOn
+                ? "bg-yellow-400/20 border-yellow-400 text-yellow-300"
+                : "bg-slate-800 border-slate-600 text-slate-400 hover:text-slate-200"
+            }`}
+          >
+            <svg viewBox="0 0 24 24" className="w-4 h-4" fill="none" stroke="currentColor"
+                 strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M9 18h6M10 22h4" />
+              <path d="M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.3 1 2.1V17h6v-.2c0-.8.4-1.6 1-2.1A7 7 0 0 0 12 2z" />
+            </svg>
+            {lightOn ? "On" : "Off"}
+          </button>
         </div>
 
         <div className="relative w-full">
@@ -576,9 +822,9 @@ return (
         {uploadMessage && <p className="text-green-400 text-xl mt-1">{uploadMessage}</p>}
 
         <div className="flex gap-2">
-          <button onClick={handleStart} disabled={status === "Printing"} className="flex-1 bg-green-600 p-2 rounded" >▶</button>
-          <button onClick={handlePause} className="flex-1 bg-yellow-500 p-2 rounded">⏸</button>
-          <button onClick={handleStop} className="flex-1 bg-red-600 p-2 rounded">■</button>
+          <button onClick={requestStart} disabled={status === "Printing"} className="flex-1 bg-green-600 p-2 rounded" >▶</button>
+          <button onClick={requestPause} className="flex-1 bg-yellow-500 p-2 rounded">⏸</button>
+          <button onClick={requestStop} className="flex-1 bg-red-600 p-2 rounded">■</button>
         </div>
       </div>
 
@@ -591,11 +837,6 @@ return (
           onLoad={() => console.log(`[FDM VIDEO] ✅ Stream connected to ${ip}:8080`)}
           onError={() => console.log(`[FDM VIDEO] ❌ Failed to load stream from ${ip}:8080`)}
         />
-        {!connected && (
-          <div className="absolute inset-0 flex items-center justify-center bg-black/70 text-slate-500">
-            Waiting for connection...
-          </div>
-        )}
       </div>
 
     </div>
@@ -841,6 +1082,22 @@ return (
       )}
 
     </div>
+
+    {/* 🔥 IN-UI CONFIRM DIALOG (replaces window.confirm) */}
+    {confirmAction && (
+      <ConfirmDialog
+        open
+        title={CONFIRM_META[confirmAction].title}
+        message={CONFIRM_META[confirmAction].message}
+        confirmLabel={CONFIRM_META[confirmAction].label}
+        onConfirm={() => {
+          const action = confirmAction
+          setConfirmAction(null)
+          CONFIRM_META[action].run()
+        }}
+        onCancel={() => setConfirmAction(null)}
+      />
+    )}
 
     {/* 🔥 FULLSCREEN POPUP */}
     {fullscreen && (

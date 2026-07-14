@@ -23,6 +23,9 @@ PRINTER_STREAM_URL = f"http://{PRINTER_IP}:8080/?action=stream"
 
 POLL_INTERVAL = 1
 
+# 💡 LIGHT: name of the [output_pin ...] in your printer.cfg
+LIGHT_PIN = "caselight"
+
 router = APIRouter()
 connected_clients: Set[WebSocket] = set()
 latest_status = {}
@@ -129,7 +132,9 @@ async def poll_printer():
                         "print_stats": "",
                         "virtual_sdcard": "",
                         "gcode_move": "",
-                        "motion_report": ""
+                        "motion_report": "",
+                        # 💡 LIGHT: stream the pin so the button stays in sync live
+                        f"output_pin {LIGHT_PIN}": ""
                     }
                 )
 
@@ -405,6 +410,39 @@ async def get_print_status():
             "state": "Disconnected",
             "filename": ""
         }
+
+# =========================
+# LIGHT (case light on/off)
+# =========================
+@router.post("/light")
+async def set_light(on: bool):
+    value = 1 if on else 0
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            await client.post(
+                f"{BASE_URL}/printer/gcode/script",
+                json={"script": f"SET_PIN PIN={LIGHT_PIN} VALUE={value}"}
+            )
+        return {"status": True, "on": on}
+    except Exception as e:
+        print("Light error:", e)
+        return {"status": False}
+
+
+# 💡 LIGHT: read the current pin value so the button is correct on refresh
+@router.get("/light-status")
+async def light_status():
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            r = await client.get(
+                f"{BASE_URL}/printer/objects/query",
+                params={f"output_pin {LIGHT_PIN}": ""}
+            )
+        val = r.json()["result"]["status"][f"output_pin {LIGHT_PIN}"]["value"]
+        return {"on": val > 0}
+    except Exception as e:
+        print("Light status error:", e)
+        return {"on": False}
 
 # =========================
 # BED DETECTION ENDPOINTS

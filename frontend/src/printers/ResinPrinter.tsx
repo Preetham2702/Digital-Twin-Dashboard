@@ -2,8 +2,15 @@ import React, { useEffect, useState } from "react"
 import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer
 } from "recharts"
+import type { MachineSummary } from "../types/machine"
 
-export default function Resin({ onConnectionChange }: { onConnectionChange?: (v: boolean) => void }) {
+export default function Resin({
+  onConnectionChange,
+  onSummary,
+}: {
+  onConnectionChange?: (v: boolean) => void
+  onSummary?: (s: MachineSummary) => void
+}) {
 
   const [data, setData] = useState<{ time: number; layer: number; uvled: number; tank: number }[]>([])
   const [status, setStatus] = useState("Disconnected")
@@ -37,67 +44,93 @@ export default function Resin({ onConnectionChange }: { onConnectionChange?: (v:
 
   useEffect(() => {
     let isMounted = true
-    const socket = new WebSocket("ws://localhost:8000/ws/resin")
+    let reconnectTimeout: ReturnType<typeof setTimeout> | null = null
 
-    socket.onopen = () => {
+    const connect = () => {
       if (!isMounted) return
-      setConnected(true)
-    }
 
-    socket.onmessage = (event) => {
-      if (!isMounted) return
-      try {
-        const msg = JSON.parse(event.data)
+      const socket = new WebSocket("ws://localhost:8000/ws/resin")
 
-        // Report actual printer connection to Dashboard header
-        const printerUp = msg.printer_connected ?? false
-        if (typeof onConnectionChange === "function") onConnectionChange(printerUp)
+      socket.onopen = () => {
+        if (!isMounted) return
+        setConnected(true)
+      }
 
-        setStatus(msg.status ?? "Idle")
-        setLayer(msg.current_layer ?? 0)
-        setTotalLayers(msg.total_layers ?? 0)
-        setProgress(msg.progress ?? 0)
-        setZHeight(msg.z_position_mm ?? 0)
-        setRemainingMin(msg.remaining_time_min ?? 0)
-        setFilename(msg.filename ?? "")
+      socket.onmessage = (event) => {
+        if (!isMounted) return
+        try {
+          const msg = JSON.parse(event.data)
 
-        setUvledTemp(msg.uvled_temp_c ?? 0)
-        setTankTemp(msg.tank_temp_c ?? 0)
-        setTankTarget(msg.tank_target_c ?? 0)
-        setHeatOn(msg.heat_on ?? false)
-        setTimelapse(msg.timelapse_on ?? false)
-        setFilmCount(msg.release_film_count ?? 0)
-        setFilmMax(msg.release_film_max ?? 60000)
-        setErrorNum(msg.error_number ?? 0)
+          // Report actual printer connection to Dashboard header
+          const printerUp = msg.printer_connected ?? false
+          if (typeof onConnectionChange === "function") onConnectionChange(printerUp)
 
-        setData(prev => [
-          ...prev.slice(-40),
-          {
-            time: prev.length,
-            layer: msg.current_layer ?? 0,
-            uvled: msg.uvled_temp_c ?? 0,
-            tank: msg.tank_temp_c ?? 0,
-          }
-        ])
+          const currentStatus = msg.status ?? "Idle"
+          const currentProgress = msg.progress ?? 0
+          const currentUvledTemp = msg.uvled_temp_c ?? 0
+          const currentTankTemp = msg.tank_temp_c ?? 0
 
-      } catch (err) {
-        console.error("WebSocket parse error:", err)
+          onSummary?.({
+            status: printerUp
+              ? currentProgress > 0
+                ? "running"
+                : "idle"
+              : "offline",
+            progress: currentProgress > 0 ? currentProgress * 100 : null,
+            temps: [
+              { label: "UV LED", value: currentUvledTemp },
+              { label: "Tank", value: currentTankTemp },
+            ],
+            detail: currentStatus,
+          })
+
+          setStatus(currentStatus)
+          setLayer(msg.current_layer ?? 0)
+          setTotalLayers(msg.total_layers ?? 0)
+          setProgress(msg.progress ?? 0)
+          setZHeight(msg.z_position_mm ?? 0)
+          setRemainingMin(msg.remaining_time_min ?? 0)
+          setFilename(msg.filename ?? "")
+
+          setUvledTemp(msg.uvled_temp_c ?? 0)
+          setTankTemp(msg.tank_temp_c ?? 0)
+          setTankTarget(msg.tank_target_c ?? 0)
+          setHeatOn(msg.heat_on ?? false)
+          setTimelapse(msg.timelapse_on ?? false)
+          setFilmCount(msg.release_film_count ?? 0)
+          setFilmMax(msg.release_film_max ?? 60000)
+          setErrorNum(msg.error_number ?? 0)
+
+          setData(prev => [
+            ...prev.slice(-40),
+            {
+              time: prev.length,
+              layer: msg.current_layer ?? 0,
+              uvled: msg.uvled_temp_c ?? 0,
+              tank: msg.tank_temp_c ?? 0,
+            }
+          ])
+
+        } catch (err) {
+          console.error("WebSocket parse error:", err)
+        }
+      }
+
+      socket.onclose = () => {
+        if (!isMounted) return
+        setStatus("Disconnected")
+        setConnected(false)
+        if (typeof onConnectionChange === "function") onConnectionChange(false)
+        // Auto-reconnect when the socket closes
+        reconnectTimeout = setTimeout(connect, 3000)
       }
     }
 
-    socket.onclose = () => {
-      if (!isMounted) return
-      setStatus("Disconnected")
-      setConnected(false)
-
-      if (typeof onConnectionChange === "function") {
-        onConnectionChange(false)
-      }
-    }
+    connect()
 
     return () => {
       isMounted = false
-      socket.close()
+      if (reconnectTimeout) clearTimeout(reconnectTimeout)
     }
   }, [])
 

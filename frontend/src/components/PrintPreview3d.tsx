@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react"
 import * as THREE from "three"
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js"
-import { type Model3D, FEATURE_COLORS } from "../utils/gcode3d"
+import { type Model3D, FEATURE_COLORS } from "../utils/Gcode3d.ts"
 
 export type ColorMode = "progress" | "feature" | "speed"
 
@@ -16,7 +16,6 @@ interface Props {
   skeletonColor?: string
 }
 
-// Builds a small X/Y/Z gizmo (colored arrows + labels) for the corner overlay.
 // Builds a small X/Y/Z gizmo (colored arrows + dot tips + letter labels).
 function makeGizmo(): THREE.Group {
   const g = new THREE.Group()
@@ -24,7 +23,7 @@ function makeGizmo(): THREE.Group {
 
   const makeLabel = (text: string, color: string): THREE.Sprite => {
     const c = document.createElement("canvas")
-    c.width = 
+    c.width = 64
     c.height = 64
     const ctx = c.getContext("2d")!
     ctx.fillStyle = color
@@ -237,11 +236,7 @@ export default function PrintPreview3D({
       scene.add(travel)
     }
 
-    const markerGeo = new THREE.SphereGeometry(radius * 0.025, 16, 16)
-    const markerMat = new THREE.MeshBasicMaterial({ color: 0xfb923c })
-    const marker = new THREE.Mesh(markerGeo, markerMat)
-    marker.visible = false
-    scene.add(marker)
+    // 🟠 nozzle marker removed
 
     const bandPts = new Float32Array([
       tx(min[0]), 0, tz(min[1]),
@@ -268,13 +263,10 @@ export default function PrintPreview3D({
 
       const th = toolheadRef.current
       if (th) {
-        marker.visible = true
-        marker.position.set(tx(th.x), tyUp(th.z), tz(th.y))
         const inRange = th.z >= mzMin && th.z <= mzMax
         band.visible = inRange
         band.position.y = tyUp(th.z)
       } else {
-        marker.visible = false
         band.visible = false
       }
 
@@ -313,7 +305,6 @@ export default function PrintPreview3D({
       edgesGeo?.dispose(); boxGeo?.dispose(); boxMat?.dispose()
       axes.dispose(); originGeo.dispose(); originMat.dispose()
       travelGeo?.dispose(); travelMat?.dispose()
-      markerGeo.dispose(); markerMat.dispose()
       bandGeo.dispose(); bandMat.dispose()
       gizmo.traverse((o) => {
         const m = o as THREE.Mesh
