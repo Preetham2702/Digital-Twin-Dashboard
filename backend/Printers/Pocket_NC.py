@@ -4,17 +4,16 @@ import socket
 import json
 from typing import Set
 from fastapi import HTTPException
+from services.perf import span
 
 router = APIRouter()
 
 connected_clients: Set[WebSocket] = set()
 
-# 👉 Use hostname if possible (better than changing IP)
-POCKETNC_IP ="pocketnc.local"
-PORT = 5000
-CONTROL_PORT = 5002
+POCKETNC_IP = "10.106.89.249"   # Pi's IP (routes through to PocketNC)
+PORT = 8000                 # single port for stream + control
 current_file = None
-DRY_RUN = False 
+DRY_RUN = False
 
 state_map = {
     1: "Estop",
@@ -63,25 +62,23 @@ async def stream_loop():
         try:
             print("🔌 Connecting to PocketNC socket...")
 
-            # create socket (non-blocking via thread)
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
-            # connect without blocking event loop
             await asyncio.to_thread(sock.connect, (POCKETNC_IP, PORT))
+
+            # identify as stream client
+            await asyncio.to_thread(sock.sendall, json.dumps({"type": "stream"}).encode())
 
             print("✅ Connected to PocketNC stream")
 
-            # 🔥 IMMEDIATE CONNECTION SIGNAL (YOUR REQUIREMENT)
             await broadcast({
                 "connected": True,
                 "raw_status": {}
             })
 
             buffer = ""
-            
 
             while True:
-                # read socket safely (non-blocking)
                 chunk = await asyncio.to_thread(sock.recv, 1024)
 
                 if not chunk:
@@ -94,7 +91,6 @@ async def stream_loop():
 
                     raw = json.loads(line.strip())
 
-                    # format exactly for your frontend
                     data = {
                         "connected": True,
                         "raw_status": {
@@ -124,7 +120,6 @@ async def stream_loop():
         except Exception as e:
             print("❌ Socket error:", e)
 
-            # 🔥 SEND DISCONNECTED STATUS
             await broadcast({
                 "connected": False,
                 "raw_status": {}
@@ -142,25 +137,29 @@ async def startup_event():
 
 
 def send_control(command):
+    # label the row by the command name (e.g. "start", "load", "feed")
+    cmd_name = command.get("cmd") or command.get("command") or command.get("action") or str(command)[:40]
     try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(2)
+        with span("pocketnc", "upstream", "TCP", str(cmd_name)) as s:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(10)
 
-        sock.connect((POCKETNC_IP, CONTROL_PORT))
+            sock.connect((POCKETNC_IP, PORT))
 
-        sock.sendall(json.dumps(command).encode())
+            sock.sendall(json.dumps(command).encode())
 
-        # 🔥 read ONCE (not infinite loop)
-        data = sock.recv(4096)
+            data = sock.recv(4096)
 
-        sock.close()
+            sock.close()
 
-        print("CONTROL RESPONSE:", data)
+            print("CONTROL RESPONSE:", data)
 
-        if not data:
-            return {"status": "no response"}
+            if not data:
+                s["status"] = "empty"
+                return {"status": "no response"}
 
-        return json.loads(data.decode())
+            s["status"] = "ok"
+            return json.loads(data.decode())
 
     except Exception as e:
         print("Control error:", e)
@@ -171,7 +170,7 @@ def is_connected():
     try:
         sock = socket.socket()
         sock.settimeout(1)
-        sock.connect((POCKETNC_IP, CONTROL_PORT))
+        sock.connect((POCKETNC_IP, PORT))
         sock.close()
         return True
     except:
@@ -180,7 +179,6 @@ def is_connected():
 
 def safe_range(value, min_v, max_v):
     return min_v <= value <= max_v
-
 
 
 @router.post("/pocketnc/load")
@@ -201,7 +199,7 @@ def load_file(file: str):
 def list_files():
     response = send_control({"action": "list_files"})
 
-    print("FILES RESPONSE:", response)  # 🔥 debug
+    print("FILES RESPONSE:", response)
 
     if not response or "error" in response:
         return {"files": []}
@@ -237,7 +235,6 @@ def stop():
 @router.post("/pocketnc/estop")
 def estop():
     return send_control({"action": "estop"})
-
 
 
 @router.post("/pocketnc/feed")
@@ -280,7 +277,7 @@ def set_line(line: int):
 @router.get("/pocketnc/file-content")
 def get_file_content(file: str):
     try:
-        path = f"/home/pocketnc/machinekit/nc_files/{file}"   # 🔥 FIXED
+        path = f"/home/pocketnc/machinekit/nc_files/{file}"
 
         with open(path, "r") as f:
             lines = f.readlines()

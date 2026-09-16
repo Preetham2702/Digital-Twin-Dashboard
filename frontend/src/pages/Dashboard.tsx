@@ -2,7 +2,7 @@
 import { useState, useCallback, useEffect } from "react"
 import FDM from "../printers/FDMPrinter"
 import Resin from "../printers/ResinPrinter"
-import PocketNC from "../printers/PocketNC"
+import PocketNC from "../printers/PocketNC.tsx"
 import Scheduler from "./Scheduler"
 import fdmImg from "../assets/fdm.jpg"
 import resinImg from "../assets/resin.jpg"
@@ -238,8 +238,8 @@ export default function Dashboard() {
           </div>
           <div className={selected === "PocketNC" ? "flex-1 overflow-auto" : "hidden"}>
             <PocketNC
-              onConnectionChange={(v) => setConnection("PocketNC", v)}
-              onSummary={(s) => setSummary("PocketNC", s)}
+              onConnectionChange={(v: boolean | null) => setConnection("PocketNC", v)}
+              onSummary={(s: MachineSummary) => setSummary("PocketNC", s)}
             />
           </div>
         </>

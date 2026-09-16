@@ -7,6 +7,7 @@ import urllib.parse
 import os
 from dotenv import load_dotenv
 import urllib.parse
+from services.perf import timed_client
 from services.bed_detector import (
     save_empty_bed,
     check_bed_status
@@ -120,7 +121,7 @@ async def poll_printer():
 
     await asyncio.sleep(5)
 
-    async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
+    async with timed_client("fdm", timeout=httpx.Timeout(10.0)) as client:
         while True:
             try:
                 response = await client.get(
@@ -198,7 +199,7 @@ async def startup_event():
 @router.get("/files")
 async def list_files():
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with timed_client("fdm", timeout=10.0) as client:
             response = await client.get(
                 f"{BASE_URL}/server/files/list",
                 params={"root": "gcodes"}
@@ -241,7 +242,7 @@ async def list_files():
 async def upload_gcode(file: UploadFile = File(...)):
     content = await file.read()
 
-    async with httpx.AsyncClient(timeout=httpx.Timeout(120.0)) as client:
+    async with timed_client("fdm", timeout=httpx.Timeout(120.0)) as client:
         response = await client.post(
             f"{BASE_URL}/server/files/upload",
             files={"file": (file.filename, content)},
@@ -262,7 +263,7 @@ async def upload_gcode(file: UploadFile = File(...)):
 @router.post("/start")
 async def start_print(filename: str):
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with timed_client("fdm", timeout=10.0) as client:
 
             # 🔥 GET CURRENT STATE
             status_res = await client.get(
@@ -295,7 +296,7 @@ async def start_print(filename: str):
 @router.post("/stop")
 async def stop_print():
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with timed_client("fdm", timeout=5.0) as client:
             await client.post(
                 f"{BASE_URL}/printer/print/cancel"
             )
@@ -310,7 +311,7 @@ async def stop_print():
 @router.post("/pause")
 async def pause_print():
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with timed_client("fdm", timeout=5.0) as client:
             await client.post(
                 f"{BASE_URL}/printer/gcode/script",
                 json={"script": "PAUSE"}
@@ -353,7 +354,7 @@ async def get_gcode(file: str):
 
         print("REQUESTING GCODE:", safe_file)
 
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with timed_client("fdm", timeout=10.0) as client:
             response = await client.get(
                 f"{BASE_URL}/server/files/gcodes/{safe_file}"
             )
@@ -374,7 +375,7 @@ async def get_gcode(file: str):
 @router.get("/printer/status")
 async def get_print_status():
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with timed_client("fdm", timeout=10.0) as client:
             response = await client.get(
                 f"{BASE_URL}/printer/objects/query",
                 params={
@@ -418,7 +419,7 @@ async def get_print_status():
 async def set_light(on: bool):
     value = 1 if on else 0
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with timed_client("fdm", timeout=5.0) as client:
             await client.post(
                 f"{BASE_URL}/printer/gcode/script",
                 json={"script": f"SET_PIN PIN={LIGHT_PIN} VALUE={value}"}
@@ -433,7 +434,7 @@ async def set_light(on: bool):
 @router.get("/light-status")
 async def light_status():
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with timed_client("fdm", timeout=5.0) as client:
             r = await client.get(
                 f"{BASE_URL}/printer/objects/query",
                 params={f"output_pin {LIGHT_PIN}": ""}

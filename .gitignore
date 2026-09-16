@@ -1,72 +1,160 @@
 ################################################
-# OS Files
+# Secrets / Environment (NEVER commit)
+################################################
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+*.pem
+*.key
+*.crt
+*.p12
+secrets/
+credentials*.json
+
+################################################
+# OS files
 ################################################
 .DS_Store
 .DS_Store?
+._*
 Thumbs.db
 desktop.ini
 
 ################################################
-# Python / FastAPI Backend
+# Python / FastAPI backend
 ################################################
-# Byte-compiled / optimized / DLL files
-**/__pycache__/
+__pycache__/
 *.py[cod]
 *$py.class
+*.so
 
 # Virtual environments
 venv/
 .venv/
 env/
+ENV/
 
-# Python distribution
+# Packaging
 build/
 dist/
 *.egg-info/
+.eggs/
 
-# Testing / Coverage
+# Testing / linting / type caches
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
 .coverage
 coverage/
 htmlcov/
+.tox/
 
-# Logs / Databases
+# Jupyter
+.ipynb_checkpoints/
+
+################################################
+# Backend runtime data (machine-specific, large, or private)
+################################################
+# Logs & perf traces
 *.log
-*.sqlite3
+backend/logs/
+logs/
+
+# Databases
 *.db
+*.sqlite
+*.sqlite3
+
+# Uploaded / generated job files
+backend/gcode_files/
+*.gcode
+*.stl
+*.3mf
+*.nc
+
+# Captured camera frames — keep only the reference image
+backend/images/
+!backend/images/empty_bed.jpg
+backend/captures/
+backend/snapshots/
+
+# Trained ML model weights / datasets
+*.h5
+*.keras
+*.pt
+*.pth
+*.onnx
+*.tflite
+*.pkl
+*.joblib
+backend/models/
+backend/datasets/
+backend/training_data/
+
+# Printer protocol dumps / sniffer captures
+printer_log_*.json
+*.pcap
+*.pcapng
+resin/*.json
 
 ################################################
-# Environment Variables (IMPORTANT)
-################################################
-.env
-.env.*
-backend/.env
-frontend/.env
-
-################################################
-# Node / React / Vite Frontend
+# Node / React / Vite frontend
 ################################################
 node_modules/
-dist/
-build/
+frontend/dist/
+dist-ssr/
 .vite/
+*.local
+*.tsbuildinfo
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+lerna-debug.log*
+.eslintcache
 
 ################################################
-# IDE / Editor
+# Docker (kept local, not published)
+################################################
+Dockerfile
+Dockerfile.*
+*.Dockerfile
+**/Dockerfile
+**/Dockerfile.*
+.dockerignore
+**/.dockerignore
+docker-compose.yml
+docker-compose.yaml
+docker-compose.*.yml
+docker-compose.*.yaml
+compose.yml
+compose.yaml
+compose.*.yml
+docker-compose.override.yml
+.docker/
+*.pid
+
+################################################
+# IDE / editors
 ################################################
 .vscode/
+!.vscode/extensions.json
 .idea/
 *.swp
 *.swo
+*.sw?
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
 
 ################################################
 # Misc
 ################################################
 *.tmp
 *.bak
+*.orig
+.cache/

@@ -12,6 +12,7 @@ import threading
 from typing import Set
 from dotenv import load_dotenv
 import requests
+from services.perf import span, record
 
 load_dotenv()
 
@@ -91,8 +92,10 @@ def get_mainboard_id():
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.settimeout(5)
     try:
-        sock.sendto(b'M99999', (PRINTER_IP, 3000))
-        data, _ = sock.recvfrom(4096)
+        with span("resin", "upstream", "UDP", "discover") as sp:
+            sock.sendto(b'M99999', (PRINTER_IP, 3000))
+            data, _ = sock.recvfrom(4096)
+            sp["status"] = "ok"
         info = json.loads(data)
         mid = info["Data"]["MainboardID"]
         print(f"[RESIN] {info['Data']['MachineName']}  |  ID: {mid}  |  FW: {info['Data']['FirmwareVersion']}")
@@ -127,8 +130,11 @@ def try_get_layer_height(filename):
 
 
 # ── Parse incoming WebSocket message (exact copy from logger) ─────────────────
+_status_req_t0 = None   # perf: when we last asked the printer for status (SDCP cmd 0)
+
+
 def parse_message(raw):
-    global state
+    global state, _status_req_t0
     try:
         data = json.loads(raw)
     except Exception:
@@ -137,6 +143,10 @@ def parse_message(raw):
     updated = False
 
     if "Status" in data:
+        # perf: round-trip from our last status request to this Status reply
+        if _status_req_t0 is not None:
+            record("resin", "upstream", "SDCP", "status", "ok", time.perf_counter() - _status_req_t0)
+            _status_req_t0 = None
         s  = data["Status"]
         pi = s.get("PrintInfo", {})
 
@@ -216,7 +226,7 @@ def flatten_state() -> dict:
 
 # ── SDCP WebSocket loop (same flow as logger's run()) ─────────────────────────
 def _sdcp_loop():
-    global _mainboard_id, start_time, layer_height_mm
+    global _mainboard_id, start_time, layer_height_mm, _status_req_t0
 
     try:
         import websocket
@@ -264,6 +274,8 @@ def _sdcp_loop():
             print(f"[RESIN] Connected to {ws_url}")
 
             for cmd in [0, 1]:
+                if cmd == 0:
+                    _status_req_t0 = time.perf_counter()
                 ws.send(make_cmd(cmd))
                 time.sleep(0.2)
 
@@ -282,6 +294,7 @@ def _sdcp_loop():
                         # Instead of save_json(), broadcast() picks it up
                         pass
                 except websocket.WebSocketTimeoutException:
+                    _status_req_t0 = time.perf_counter()
                     ws.send(make_cmd(0))
                 except KeyboardInterrupt:
                     return
@@ -392,12 +405,14 @@ async def upload(file: UploadFile = File(...)):
     contents = await file.read()
     files = {"file": (file.filename, contents, "application/octet-stream")}
     try:
-        res = requests.post(
-            f"http://{PRINTER_IP}:3030/uploadFile/upload",
-            files=files,
-            headers={"User-Agent": "Mozilla/5.0"},
-            timeout=20,
-        )
+        with span("resin", "upstream", "POST", "/uploadFile/upload") as sp:
+            res = requests.post(
+                f"http://{PRINTER_IP}:3030/uploadFile/upload",
+                files=files,
+                headers={"User-Agent": "Mozilla/5.0"},
+                timeout=20,
+            )
+            sp["status"] = res.status_code
         print("[RESIN] Upload response:", res.text)
         return {"success": res.ok}
     except Exception as e:
