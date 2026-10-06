@@ -44,39 +44,68 @@ const STATUS_STYLES: Record<MachineStatus, { text: string; label: string; border
 // Shared column grid so the header labels line up with each row.
 const COLS = "grid-cols-[2.4fr_1fr_1.2fr_1.4fr]"
 
-// Read ?view=<page> from the URL. When present, this window is a popped-out
-// single page: it renders that page only, with no top nav.
-function readStandalone(): NavPage | null {
-  const v = new URLSearchParams(window.location.search).get("view")
-  return v && NAV.some((n) => n.id === v) ? (v as NavPage) : null
+// Read ?machine=<id> from the URL. When present, this window is a popped-out
+// single machine detail view: it renders that machine only, with no top nav.
+function readStandaloneMachine(): MachineId | null {
+  const v = new URLSearchParams(window.location.search).get("machine")
+  return v && MACHINES.some((m) => m.id === v) ? (v as MachineId) : null
 }
 
 export default function Dashboard() {
-  // If launched with ?view=, this window is locked to that single page.
-  // Otherwise it's the main hub, which always shows the overview.
-  const standalone = readStandalone()
-  const page: NavPage = standalone ?? "overview"
+  const standaloneMachine = readStandaloneMachine()
+  if (standaloneMachine) return <MachineWindow id={standaloneMachine} />
+  return <Hub />
+}
 
-  const [selected, setSelected] = useState<MachineId | null>(() => {
-    if (standalone) return null // popped-out windows start clean
-    const saved = localStorage.getItem("dashboard.selected") as MachineId | null
-    return saved && MACHINES.some((m) => m.id === saved) ? saved : null
+/* ------------------------------------------------------------------
+   Popped-out machine window — one machine, full screen, no nav.
+-------------------------------------------------------------------*/
+function MachineWindow({ id }: { id: MachineId }) {
+  const machine = MACHINES.find((m) => m.id === id)!
+
+  useEffect(() => {
+    document.title = `${machine.name} · Digital Twin`
+  }, [machine.name])
+
+  const noop = useCallback(() => {}, [])
+
+  return (
+    <div className="h-screen bg-slate-900 text-gray-200 flex flex-col overflow-hidden">
+      <div className="flex-1 overflow-auto">
+        {id === "FDM" && <FDM onConnectionChange={noop} onSummary={noop} />}
+        {id === "Resin" && <Resin onConnectionChange={noop} onSummary={noop} />}
+        {id === "PocketNC" && <PocketNC onConnectionChange={noop} onSummary={noop} />}
+        {!WIRED.includes(id) && (
+          <div className="h-full flex flex-col items-center justify-center text-slate-500">
+            <div className="text-2xl mb-1">{machine.name}</div>
+            <div className="text-sm">Detail view not available yet.</div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/* ------------------------------------------------------------------
+   Main hub — top nav switches pages in place; machines open in new tabs.
+-------------------------------------------------------------------*/
+function Hub() {
+  const [page, setPage] = useState<NavPage>(() => {
+    try {
+      const saved = localStorage.getItem("dashboard.page") as NavPage | null
+      return saved && NAV.some((n) => n.id === saved) ? saved : "overview"
+    } catch {
+      return "overview"
+    }
   })
 
-  // Persist the open machine — but only in the main hub, so popped-out
-  // windows can't clobber it.
   useEffect(() => {
-    if (standalone) return
-    if (selected) localStorage.setItem("dashboard.selected", selected)
-    else localStorage.removeItem("dashboard.selected")
-  }, [selected, standalone])
-
-  // Give popped-out windows a useful tab title.
-  useEffect(() => {
-    if (!standalone) return
-    const label = NAV.find((n) => n.id === standalone)?.label ?? standalone
-    document.title = `${label} · Digital Twin`
-  }, [standalone])
+    try {
+      localStorage.setItem("dashboard.page", page)
+    } catch {
+      /* ignore */
+    }
+  }, [page])
 
   // Connection lifting. Every MachineId must have a key. Unwired machines
   // start as `false` so they render OFFLINE rather than spinning forever.
@@ -116,56 +145,48 @@ export default function Dashboard() {
   const idle = MACHINES.filter((m) => statusOf(m.id) === "idle").length
   const down = MACHINES.filter((m) => ["fault", "offline"].includes(statusOf(m.id))).length
 
-  // Each nav tab opens that page in its own window (one window per page,
-  // reused on repeat clicks) and returns the hub to the fleet list.
-  const openPage = (p: NavPage) => {
+  // Each machine opens in its own tab (one tab per machine, reused on repeat clicks).
+  const openMachine = (id: MachineId) => {
     const url = new URL(window.location.href)
-    url.searchParams.set("view", p)
-    window.open(url.toString(), `dtdash-${p}`)
-    setSelected(null)
+    url.search = ""
+    url.searchParams.set("machine", id)
+    window.open(url.toString(), `dtdash-machine-${id}`)
   }
 
   const pageLabel = NAV.find((n) => n.id === page)?.label ?? page
-  const openUnwired = selected !== null && !WIRED.includes(selected)
-
-  // Machine components (and their WebSockets) only mount on the overview, so
-  // popped-out scheduler/analytics windows don't open extra connections.
-  const mountMachines = page === "overview"
 
   return (
     <div className="h-screen bg-slate-900 text-gray-200 flex flex-col overflow-hidden">
-      {/* ---------------- TOP NAV BAR (hub window only) ---------------- */}
-      {!standalone && (
-        <header className="shrink-0 bg-slate-900 border-b border-slate-700 px-4 sm:px-6">
-          <div className="h-14 sm:h-16 flex items-center justify-between gap-4">
-            <nav className="flex items-center gap-4 sm:gap-6 text-sm overflow-x-auto whitespace-nowrap">
-              {NAV.map((t) => (
-                <button
-                  key={t.id}
-                  onClick={() => openPage(t.id)}
-                  className={`shrink-0 pb-1 border-b-2 transition-colors ${
-                    page === t.id
-                      ? "text-green-400 border-green-400"
-                      : "text-slate-400 border-transparent hover:text-gray-200"
-                  }`}
-                >
-                  {t.label}
-                </button>
-              ))}
-            </nav>
+      {/* ---------------- TOP NAV BAR ---------------- */}
+      <header className="shrink-0 bg-slate-900 border-b border-slate-700 px-4 sm:px-6">
+        <div className="h-14 sm:h-16 flex items-center justify-between gap-4">
+          <nav className="flex items-center gap-4 sm:gap-6 text-sm overflow-x-auto whitespace-nowrap">
+            {NAV.map((t) => (
+              <button
+                key={t.id}
+                onClick={() => setPage(t.id)}
+                className={`shrink-0 pb-1 border-b-2 transition-colors ${
+                  page === t.id
+                    ? "text-green-400 border-green-400"
+                    : "text-slate-400 border-transparent hover:text-gray-200"
+                }`}
+              >
+                {t.label}
+              </button>
+            ))}
+          </nav>
 
-            {/* Live fleet status — visible on every page. */}
-            <div className="flex items-center gap-3 sm:gap-4 text-sm text-slate-400 shrink-0">
-              <StatusCount color="bg-green-400" count={running} word="running" />
-              <StatusCount color="bg-yellow-400" count={idle} word="idle" />
-              {down > 0 && <StatusCount color="bg-red-400" count={down} word="down" />}
-            </div>
+          {/* Live fleet status — visible on every page. */}
+          <div className="flex items-center gap-3 sm:gap-4 text-sm text-slate-400 shrink-0">
+            <StatusCount color="bg-green-400" count={running} word="running" />
+            <StatusCount color="bg-yellow-400" count={idle} word="idle" />
+            {down > 0 && <StatusCount color="bg-red-400" count={down} word="down" />}
           </div>
-        </header>
-      )}
+        </div>
+      </header>
 
       {/* ---------------- FLEET OVERVIEW ---------------- */}
-      {page === "overview" && selected === null && (
+      {page === "overview" && (
         <div className="flex-1 overflow-auto">
           <div className="px-4 sm:px-6 py-5">
             <div className="mb-4">
@@ -187,18 +208,10 @@ export default function Dashboard() {
                 machine={m}
                 status={statusOf(m.id)}
                 summary={summaries[m.id]}
-                onOpen={() => setSelected(m.id)}
+                onOpen={() => openMachine(m.id)}
               />
             ))}
           </div>
-        </div>
-      )}
-
-      {/* ---------------- OPENED A MACHINE WITHOUT A DETAIL VIEW ---------------- */}
-      {page === "overview" && openUnwired && (
-        <div className="flex-1 flex flex-col items-center justify-center text-slate-500">
-          <div className="text-2xl mb-1">{MACHINES.find((m) => m.id === selected)?.name}</div>
-          <div className="text-sm">Detail view not available yet.</div>
         </div>
       )}
 
@@ -218,32 +231,24 @@ export default function Dashboard() {
       )}
 
       {/* ----------------------------------------------------------------
-          Machine components stay mounted while on the overview so their
-          WebSocket connections + telemetry keep flowing into the fleet view.
-          They are only shown when their detail view is open.
+          Machine components stay mounted (hidden) in the hub on every page,
+          so their WebSockets keep feeding the overview rows and the
+          status counts in the top bar.
       -----------------------------------------------------------------*/}
-      {mountMachines && (
-        <>
-          <div className={selected === "FDM" ? "flex-1 overflow-auto" : "hidden"}>
-            <FDM
-              onConnectionChange={(v) => setConnection("FDM", v)}
-              onSummary={(s) => setSummary("FDM", s)}
-            />
-          </div>
-          <div className={selected === "Resin" ? "flex-1 overflow-auto" : "hidden"}>
-            <Resin
-              onConnectionChange={(v) => setConnection("Resin", v)}
-              onSummary={(s) => setSummary("Resin", s)}
-            />
-          </div>
-          <div className={selected === "PocketNC" ? "flex-1 overflow-auto" : "hidden"}>
-            <PocketNC
-              onConnectionChange={(v: boolean | null) => setConnection("PocketNC", v)}
-              onSummary={(s: MachineSummary) => setSummary("PocketNC", s)}
-            />
-          </div>
-        </>
-      )}
+      <div className="hidden">
+        <FDM
+          onConnectionChange={(v) => setConnection("FDM", v)}
+          onSummary={(s) => setSummary("FDM", s)}
+        />
+        <Resin
+          onConnectionChange={(v) => setConnection("Resin", v)}
+          onSummary={(s) => setSummary("Resin", s)}
+        />
+        <PocketNC
+          onConnectionChange={(v: boolean | null) => setConnection("PocketNC", v)}
+          onSummary={(s: MachineSummary) => setSummary("PocketNC", s)}
+        />
+      </div>
     </div>
   )
 }
