@@ -177,8 +177,10 @@ export default function PocketNC({
   const effectiveW = Math.min(w, EFFECTIVE_W_MAX);
   const effectiveH = Math.min(h, EFFECTIVE_H_MAX);
 
+  // Below 1024px the left and right panels stack vertically.
+  const stacked = w < 1024;
   const leftW = Math.round(clamp(effectiveW * LEFT_PANEL_PCT, LEFT_PANEL_MIN, LEFT_PANEL_MAX));
-  const effectiveRightW = effectiveW - leftW;
+  const effectiveRightW = stacked ? effectiveW : effectiveW - leftW;
   const rightW = w - leftW;
 
   const gaugeSize = Math.round(clamp(effectiveH * GAUGE_PCT, GAUGE_MIN, GAUGE_MAX));
@@ -195,7 +197,7 @@ export default function PocketNC({
 
   const row1Gap = Math.round(clamp(effectiveRightW * 0.035, 26, 42));
   const axisRowMarginLeft = Math.round(clamp(effectiveRightW * 0.018, 10, 18));
-  const activeCodesWidth = Math.round(clamp(effectiveRightW * 0.43, 700, 700));
+  const activeCodesWidth = Math.round(clamp(effectiveRightW * 0.43, 240, 700));
   const activeCodesHeight = Math.round(clamp(effectiveH * 0.12, 88, 108));
   const sliderGap = Math.round(clamp(effectiveH * 0.012, 8, 12));
   const sliderSectionGap = Math.round(clamp(effectiveRightW * 0.04, 22, 36));
@@ -216,14 +218,14 @@ export default function PocketNC({
   const isRunning = status?.interp_state === 2;
   return (
     <div
-      className="overflow-hidden flex text-gray-200"
-      style={{ background: "#1e293b", width: "100vw", height: "95vh", fontSize }}
+      className={`flex text-gray-200 w-full ${stacked ? "flex-col min-h-full" : "h-full overflow-hidden"}`}
+      style={{ background: "#1e293b", fontSize }}
     >
       {/* ═══════════ LEFT PANEL ═══════════ */}
       <div
-        className="shrink-0 flex flex-col border-r border-slate-600"
+        className={`shrink-0 flex flex-col border-slate-600 ${stacked ? "border-b" : "border-r overflow-y-auto"}`}
         style={{
-          width: leftW,
+          width: stacked ? "100%" : leftW,
           padding: Math.round(leftW * 0.055),
           gap: Math.round(leftW * 0.05),
           background: "#1e293b",
@@ -340,8 +342,8 @@ export default function PocketNC({
         </div>
 
         <div
-          className="flex-1 rounded border border-slate-700 overflow-hidden min-h-[300px] relative"
-          style={{ background: "#0f172a", height: 600, flexShrink: 0 }}
+          className={`rounded border border-slate-700 overflow-hidden relative ${stacked ? "aspect-video min-h-[200px]" : "flex-1 min-h-[220px]"}`}
+          style={{ background: "#0f172a" }}
         >
           <span className="absolute inset-0 flex items-center justify-center bg-black/70 text-slate-500">
             Live Streaming
@@ -351,11 +353,11 @@ export default function PocketNC({
 
       {/* ═══════════ RIGHT PANEL ═══════════ */}
       <div
-        className="flex-1 min-w-0 flex flex-col overflow-hidden"
+        className={`flex-1 min-w-0 flex flex-col ${stacked ? "" : "overflow-y-auto"}`}
         style={{ padding: pad, gap }}
       >
         {/* ROW 1 */}
-        <div className="flex items-center shrink-0" style={{ gap: row1Gap }}>
+        <div className="flex flex-wrap items-center justify-center xl:justify-start shrink-0" style={{ gap: row1Gap }}>
           <GaugeBlock
             label="Spindle"
             value={spindle}
@@ -378,8 +380,8 @@ export default function PocketNC({
 
           <div className="flex flex-col items-center" style={{ gap: 10 }}>
             <div
-              className="flex items-center"
-              style={{ gap: AXIS_BOX_GAP, marginLeft: axisRowMarginLeft }}
+              className="flex flex-wrap justify-center items-center"
+              style={{ gap: AXIS_BOX_GAP, marginLeft: stacked ? 0 : axisRowMarginLeft }}
             >
               {[
                 ["X", position[0]],
@@ -422,8 +424,9 @@ export default function PocketNC({
               style={{
                 background: "#0f172a",
                 padding: "8px 14px",
-                minWidth: activeCodesWidth,
-                height: activeCodesHeight,
+                width: activeCodesWidth,
+                maxWidth: "100%",
+                minHeight: activeCodesHeight,
               }}
             >
               <div
@@ -452,7 +455,7 @@ export default function PocketNC({
         </div>
 
         {/* ROW 2 */}
-        <div className="flex shrink-0" style={{ gap: sliderSectionGap }}>
+        <div className="flex flex-col md:flex-row shrink-0" style={{ gap: sliderSectionGap }}>
           <div className="flex-1 flex flex-col" style={{ gap: sliderGap }}>
             <Slider label="Max Velocity" labelW={sliderLabelW} fontSize={sliderFontSize} />
             <Slider label="Feed Rate" labelW={sliderLabelW} fontSize={sliderFontSize} />
@@ -465,7 +468,7 @@ export default function PocketNC({
 
         {/* ROW 3 */}
         <div
-          className="flex-1 min-h-0 grid grid-rows-2"
+          className="shrink-0 grid grid-rows-2"
           style={{ gap, height: `${chartSectionHeight}px` }}
         >
           <ChartPanel

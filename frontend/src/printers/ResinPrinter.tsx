@@ -157,10 +157,10 @@ export default function Resin({
   }
 
   return (
-    <div className="flex h-[calc(100vh-64px)] overflow-hidden">
+    <div className="flex flex-col lg:flex-row min-h-full lg:h-full lg:overflow-hidden">
 
       {/* ===== LEFT PANEL ===== */}
-      <div className="w-[30%] min-w-[340px] p-5 flex flex-col gap-4 border-r border-slate-700 overflow-hidden">
+      <div className="w-full lg:w-[30%] lg:min-w-[300px] p-3 sm:p-5 flex flex-col gap-4 border-b lg:border-b-0 lg:border-r border-slate-700 lg:overflow-hidden">
 
         <h2 className="text-lg font-semibold">Resin Machine</h2>
 
@@ -176,7 +176,7 @@ export default function Resin({
         </div>
 
         <div
-          className="flex-1 bg-black border border-slate-600 rounded overflow-hidden cursor-pointer relative"
+          className="aspect-video lg:aspect-auto lg:flex-1 min-h-[200px] bg-black border border-slate-600 rounded overflow-hidden cursor-pointer relative"
           onClick={() => cameraOk && setFullscreen(true)}
         >
           <img
@@ -214,10 +214,10 @@ export default function Resin({
       )}
 
       {/* ===== RIGHT PANEL ===== */}
-      <div className="flex-1 p-4 flex flex-col gap-5 overflow-hidden">
+      <div className="flex-1 min-w-0 p-3 sm:p-4 flex flex-col gap-4 lg:gap-5 lg:overflow-y-auto">
 
         {/* Row 1 — Print info */}
-        <div className="grid grid-cols-4 gap-2">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
           <Card title="Layer">{layer} / {totalLayers}</Card>
           <Card title="Z Height">{zHeight} mm</Card>
           <Card title="Remaining">{connected ? formatRemaining(remainingMin) : "--"}</Card>
@@ -225,7 +225,7 @@ export default function Resin({
         </div>
 
         {/* Row 2 — Temperatures */}
-        <div className="grid grid-cols-4 gap-2">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
           <Card title="UV LED Temp">{connected ? `${uvledTemp} °C` : "--"}</Card>
           <Card title="Tank Temp">{connected ? `${tankTemp} °C` : "--"}</Card>
           <Card title="Tank Target">{connected ? `${tankTarget} °C` : "--"}</Card>
@@ -233,7 +233,7 @@ export default function Resin({
         </div>
 
         {/* Row 3 — Machine info */}
-        <div className="grid grid-cols-4 gap-2">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
           <Card title="Release Film">{connected ? `${filmCount}` : "--"}</Card>
           <Card title="Film Max">{connected ? `${filmMax}` : "--"}</Card>
           <Card title="Timelapse">{connected ? (timelapse ? "ON" : "OFF") : "--"}</Card>
@@ -241,7 +241,7 @@ export default function Resin({
         </div>
 
         {/* Chart — Layer vs Time */}
-        <div className="bg-slate-800 p-3 rounded flex flex-col" style={{ height: "200px" }}>
+        <div className="bg-slate-800 p-3 rounded flex flex-col shrink-0" style={{ height: "200px" }}>
           <h3 className="text-sm mb-2">Layer vs Time</h3>
           <div className="flex-1">
             <ResponsiveContainer width="100%" height="100%">
@@ -256,7 +256,7 @@ export default function Resin({
         </div>
 
         {/* Chart — Temperature */}
-        <div className="bg-slate-800 p-3 rounded flex flex-col" style={{ height: "200px" }}>
+        <div className="bg-slate-800 p-3 rounded flex flex-col shrink-0" style={{ height: "200px" }}>
           <h3 className="text-sm mb-2">Temperature</h3>
           <div className="flex-1">
             <ResponsiveContainer width="100%" height="100%">
@@ -278,9 +278,9 @@ export default function Resin({
 
 function Card({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="bg-slate-800 p-3 rounded text-center">
-      <p className="text-sm text-gray-400">{title}</p>
-      <p className="text-lg font-semibold text-green-400">{children}</p>
+    <div className="bg-slate-800 p-2 sm:p-3 rounded text-center min-w-0">
+      <p className="text-xs sm:text-sm text-gray-400 truncate">{title}</p>
+      <p className="text-base sm:text-lg font-semibold text-green-400 break-words">{children}</p>
     </div>
   )
 }

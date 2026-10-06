@@ -737,12 +737,12 @@ useEffect(() => {
   console.log("[FDM] Using printer IP:", ip)
 
 return (
-  <div className="relative h-[calc(100vh-64px)] p-3 grid grid-cols-[2fr_3fr] gap-2">
+  <div className="relative min-h-full lg:h-full p-2 sm:p-3 grid grid-cols-1 lg:grid-cols-[2fr_3fr] gap-2">
 
     {/* 🟠 BED ALERT: full-width banner across both columns when a finished
         print is still on the bed. Auto-dismisses when the bed is cleared. */}
     {bedAlert && (
-      <div className="col-span-2">
+      <div className="lg:col-span-2">
         <BedAlert
           visible
           filename={selectedFile}
@@ -829,7 +829,7 @@ return (
       </div>
 
       {/* VIDEO */}
-      <div className="bg-black flex-1 rounded border border-slate-700 overflow-hidden min-h-[300px] relative">
+      <div className="bg-black aspect-video lg:aspect-auto lg:flex-1 rounded border border-slate-700 overflow-hidden min-h-[220px] lg:min-h-[300px] relative">
         <img
           src={`http://${ip}:8080/?action=stream`}
           className="w-full h-full object-cover cursor-pointer"
@@ -842,17 +842,17 @@ return (
     </div>
 
     {/* RIGHT COLUMN */}
-    <div className="flex flex-col gap-4 min-w-0 overflow-y-auto">
+    <div className="flex flex-col gap-4 min-w-0 lg:overflow-y-auto">
 
       {/* TOP: XYZ + GAUGES */}
       <div className="flex gap-3 flex-wrap">
         {[{label:"X",value:x},{label:"Y",value:y},{label:"Z",value:z}].map(axis => (
-          <div key={axis.label} className="bg-slate-800/5 p-3 flex-1 w-[50px] rounded border border-slate-700 flex flex-col justify-center items-center">
+          <div key={axis.label} className="bg-slate-800/5 p-3 flex-1 min-w-[80px] rounded border border-slate-700 flex flex-col justify-center items-center">
             <p className="text-lg font-semibold text-slate-300">{axis.label}</p>
             <p className="text-2xl font-bold text-green-400">{axis.value.toFixed(2)}</p>
           </div>
         ))}
-        <div className="bg-slate-800/5 p-3 flex-1 min-w-[200px] rounded border border-slate-700">
+        <div className="bg-slate-800/5 p-3 flex-1 min-w-[180px] rounded border border-slate-700">
           <p>Nozzle</p>
           <div className="flex gap-3 items-center">
             <SemiGauge value={nozzleTemp} max={300} color="#ee810d" />
@@ -863,7 +863,7 @@ return (
           </div>
         </div>
 
-        <div className="bg-slate-800/5 p-3 flex-1 min-w-[200px] rounded border border-slate-700">
+        <div className="bg-slate-800/5 p-3 flex-1 min-w-[180px] rounded border border-slate-700">
           <p>Bed</p>
           <div className="flex gap-3 items-center">
             <SemiGauge value={bedTemp} max={120} color="#3b82f6" />
@@ -876,7 +876,7 @@ return (
       </div>
 
       {/* FEED */}
-      <div className="bg-slate-800/5 p-4 rounded border border-slate-700 w-full h-[180px]">
+      <div className="bg-slate-800/5 p-4 rounded border border-slate-700 w-full h-[180px] shrink-0">
         <h3 className="mb-2">Feed Rate</h3>
         <ResponsiveContainer width="100%" height="85%">
           <LineChart data={motionData}>
@@ -890,7 +890,7 @@ return (
       </div>
 
       {/* VELOCITY */}
-      <div className="bg-slate-800/5 p-4 rounded border border-slate-700 w-full h-[180px]">
+      <div className="bg-slate-800/5 p-4 rounded border border-slate-700 w-full h-[180px] shrink-0">
         <h3 className="mb-2">Velocity</h3>
         <ResponsiveContainer width="100%" height="85%">
           <LineChart data={motionData}>
@@ -909,7 +909,7 @@ return (
       </p>
 
       {/* 🟢 3D PRINT PREVIEW */}
-      <div className="bg-[#0d1117] rounded border border-slate-700 w-full h-[500px] overflow-hidden flex flex-col">
+      <div className="bg-[#0d1117] rounded border border-slate-700 w-full h-[60vh] min-h-[320px] max-h-[600px] shrink-0 overflow-hidden flex flex-col">
         {/* header */}
         <div className="sticky top-0 bg-[#0d1117] px-4 py-2 border-b border-slate-700">
           <div className="flex justify-between items-center">
@@ -928,7 +928,7 @@ return (
           </div>
 
           {/* toolbar: color mode + travels */}
-          <div className="flex items-center gap-2 mt-2 text-xs">
+          <div className="flex flex-wrap items-center gap-2 mt-2 text-xs">
             <div className="flex rounded overflow-hidden border border-slate-700">
               {(["progress", "feature", "speed"] as const).map(m => (
                 <button
