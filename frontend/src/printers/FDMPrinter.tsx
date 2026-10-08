@@ -314,6 +314,13 @@ useEffect(() => {
 
     socket.onopen = () => {
       console.log("FDM connected")
+      // (Re)connected — e.g. after the backend restarted. Reload the data that
+      // is otherwise only fetched once on page load.
+      fetchFiles()
+      fetch(`${API_URL}/light-status`)
+        .then(r => r.json())
+        .then(d => { if (typeof d.on === "boolean") setLightOn(d.on) })
+        .catch(() => {})
     }
 
     socket.onmessage = (event) => {

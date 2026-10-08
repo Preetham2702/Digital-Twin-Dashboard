@@ -66,10 +66,21 @@ export default function PocketNC({
         .catch(console.log);
     };
 
+    let ws: WebSocket | null = null;
+    let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
+
     const connect = () => {
       if (!isMounted) return;
 
-      const ws = new WebSocket(`${WS_URL}/ws/pocketnc`);
+      ws = new WebSocket(`${WS_URL}/ws/pocketnc`);
+
+      // (Re)connected to the backend — refresh the file list.
+      ws.onopen = () => {
+        fetch(`${API_URL}/pocketnc/files`)
+          .then((res) => res.json())
+          .then((d) => d.files && setFiles(d.files))
+          .catch(console.log);
+      };
 
       ws.onmessage = (e) => {
         if (!isMounted) return;
@@ -115,7 +126,9 @@ export default function PocketNC({
       ws.onclose = () => {
         if (!isMounted) return;
         onConnectionChangeRef.current?.(false);
-        // No auto-reconnect — PocketNC connects via ethernet manually.
+        // Reconnect to the backend (e.g. after it restarts). Whether the
+        // PocketNC machine itself is connected is reported by the backend.
+        reconnectTimeout = setTimeout(connect, 3000);
       };
 
       ws.onerror = () => {
@@ -128,6 +141,8 @@ export default function PocketNC({
 
     return () => {
       isMounted = false;
+      if (reconnectTimeout) clearTimeout(reconnectTimeout);
+      ws?.close();
     };
   }, []); // ← empty deps: runs once on mount, refs keep callbacks current
   const position = status?.toolhead?.position ?? [0, 0, 0, 0, 0];
