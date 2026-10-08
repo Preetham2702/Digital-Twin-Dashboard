@@ -74,7 +74,8 @@ function MachineWindow({ id }: { id: MachineId }) {
       <div className="flex-1 overflow-auto">
         {id === "FDM" && <FDM onConnectionChange={noop} onSummary={noop} />}
         {id === "Resin" && <Resin onConnectionChange={noop} onSummary={noop} />}
-        {id === "PocketNC" && <PocketNC onConnectionChange={noop} onSummary={noop} />}
+        {/* PocketNC is down for now: page is viewable but makes no connections. Remove `offline` to re-enable. */}
+        {id === "PocketNC" && <PocketNC offline onConnectionChange={noop} onSummary={noop} />}
         {!WIRED.includes(id) && (
           <div className="h-full flex flex-col items-center justify-center text-slate-500">
             <div className="text-2xl mb-1">{machine.name}</div>
@@ -112,7 +113,7 @@ function Hub() {
   const [connections, setConnections] = useState<Record<MachineId, boolean | null>>({
     FDM: null,
     Resin: null,
-    PocketNC: null,
+    PocketNC: false, // disabled
     "Hybrid-Cell": false,
   })
   // Live summary (status / progress / temps) reported by each component.
@@ -244,10 +245,12 @@ function Hub() {
           onConnectionChange={(v) => setConnection("Resin", v)}
           onSummary={(s) => setSummary("Resin", s)}
         />
+        {/* PocketNC disabled for now:
         <PocketNC
           onConnectionChange={(v: boolean | null) => setConnection("PocketNC", v)}
           onSummary={(s: MachineSummary) => setSummary("PocketNC", s)}
         />
+        */}
       </div>
     </div>
   )

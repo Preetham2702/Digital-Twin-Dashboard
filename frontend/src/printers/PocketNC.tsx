@@ -26,9 +26,12 @@ function clamp(value: number, min: number, max: number) {
 export default function PocketNC({
   onConnectionChange,
   onSummary,
+  offline = false,
 }: {
   onConnectionChange?: (v: boolean | null) => void
   onSummary?: (s: MachineSummary) => void
+  // When true: show the page as "down" — no fetches, no WebSocket, controls disabled.
+  offline?: boolean
 }) {
   const [status, setStatus] = useState<any>({});
   const { w, h } = useWindowSize();
@@ -49,6 +52,12 @@ export default function PocketNC({
   useEffect(() => { onSummaryRef.current = onSummary; });
 
   useEffect(() => {
+    // Machine is down for now — don't poll or open any connection.
+    if (offline) {
+      onConnectionChangeRef.current?.(false);
+      return;
+    }
+
     let isMounted = true;
 
     fetch(`${API_URL}/pocketnc/files`)
