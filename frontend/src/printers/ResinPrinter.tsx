@@ -3,6 +3,7 @@ import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer
 } from "recharts"
 import type { MachineSummary } from "../types/machine"
+import { API_URL, WS_URL } from "../config"
 
 export default function Resin({
   onConnectionChange,
@@ -29,7 +30,7 @@ export default function Resin({
   // Refresh camera snapshot every second
   useEffect(() => {
     const interval = setInterval(() => {
-      setPreviewSrc(`http://localhost:8000/preview?t=${Date.now()}`)
+      setPreviewSrc(`${API_URL}/preview?t=${Date.now()}`)
     }, 1000)
     return () => clearInterval(interval)
   }, [])
@@ -49,7 +50,7 @@ export default function Resin({
     const connect = () => {
       if (!isMounted) return
 
-      const socket = new WebSocket("ws://localhost:8000/ws/resin")
+      const socket = new WebSocket(`${WS_URL}/ws/resin`)
 
       socket.onopen = () => {
         if (!isMounted) return
@@ -135,7 +136,7 @@ export default function Resin({
   }, [])
 
   const post = (endpoint: string) =>
-    fetch(`http://localhost:8000/${endpoint}`, {
+    fetch(`${API_URL}/${endpoint}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({})
@@ -146,7 +147,7 @@ export default function Resin({
     if (!file) return
     const formData = new FormData()
     formData.append("file", file)
-    await fetch("http://localhost:8000/upload", { method: "POST", body: formData })
+    await fetch(`${API_URL}/upload`, { method: "POST", body: formData })
   }
 
   const formatRemaining = (min: number) => {

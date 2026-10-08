@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { LineChart, Line, XAxis, YAxis, ResponsiveContainer } from "recharts";
 import type { MachineSummary } from "../types/machine";
+import { API_URL, WS_URL } from "../config"
 
 /* ── useWindowSize hook ─────────────────────────────────────── */
 function useWindowSize() {
@@ -50,7 +51,7 @@ export default function PocketNC({
   useEffect(() => {
     let isMounted = true;
 
-    fetch("http://localhost:8000/pocketnc/files")
+    fetch(`${API_URL}/pocketnc/files`)
       .then((res) => res.json())
       .then((d) => d.files && setFiles(d.files))
       .catch(console.log);
@@ -59,7 +60,7 @@ export default function PocketNC({
 
     const fetchGcode = (file: string) => {
       if (!file) return;
-      fetch(`http://localhost:8000/pocketnc/file-content?file=${file}`)
+      fetch(`${API_URL}/pocketnc/file-content?file=${file}`)
         .then((res) => res.json())
         .then((d) => d.lines && setGcodeLines(d.lines))
         .catch(console.log);
@@ -68,7 +69,7 @@ export default function PocketNC({
     const connect = () => {
       if (!isMounted) return;
 
-      const ws = new WebSocket("ws://localhost:8000/ws/pocketnc");
+      const ws = new WebSocket(`${WS_URL}/ws/pocketnc`);
 
       ws.onmessage = (e) => {
         if (!isMounted) return;
@@ -209,10 +210,10 @@ export default function PocketNC({
   const gcodeFontScale = 0.82;
 
   const start = () =>
-    fetch("http://localhost:8000/pocketnc/start", { method: "POST" });
+    fetch(`${API_URL}/pocketnc/start`, { method: "POST" });
 
   const stop = () =>
-    fetch("http://localhost:8000/pocketnc/stop", { method: "POST" });
+    fetch(`${API_URL}/pocketnc/stop`, { method: "POST" });
 
   const isPaused = status?.interp_state === 3;
   const isRunning = status?.interp_state === 2;
@@ -232,7 +233,7 @@ export default function PocketNC({
         }}
       >
         <button
-          onClick={() => fetch("http://localhost:8000/pocketnc/estop", { method: "POST" })}
+          onClick={() => fetch(`${API_URL}/pocketnc/estop`, { method: "POST" })}
           className="w-full bg-red-500 hover:bg-red-600 text-white font-bold rounded tracking-widest"
         >
           E-STOP
@@ -248,7 +249,7 @@ export default function PocketNC({
               const file = e.target.files?.[0];
               if (!file) return;
 
-              await fetch(`http://localhost:8000/pocketnc/load?file=${file.name}`, {
+              await fetch(`${API_URL}/pocketnc/load?file=${file.name}`, {
                 method: "POST",
               });
             }}
@@ -284,11 +285,11 @@ export default function PocketNC({
                     key={file}
                     className="cursor-pointer hover:text-green-400"
                     onClick={async () => {
-                      await fetch(`http://localhost:8000/pocketnc/load?file=${file}`, {
+                      await fetch(`${API_URL}/pocketnc/load?file=${file}`, {
                         method: "POST",
                       });
 
-                      fetch("http://localhost:8000/pocketnc/files")
+                      fetch(`${API_URL}/pocketnc/files`)
                         .then((res) => res.json())
                         .then((d) => d.files && setFiles(d.files));
                     }}
@@ -309,9 +310,9 @@ export default function PocketNC({
               console.log("PAUSE CLICKED");   // 🔥 ADD THIS
             
               if (isPaused) {
-                fetch("http://localhost:8000/pocketnc/start", { method: "POST" });
+                fetch(`${API_URL}/pocketnc/start`, { method: "POST" });
               } else {
-                fetch("http://localhost:8000/pocketnc/pause", { method: "POST" });
+                fetch(`${API_URL}/pocketnc/pause`, { method: "POST" });
               }
             }}
             className={`flex-1 rounded ${
@@ -333,7 +334,7 @@ export default function PocketNC({
               const value = Number(e.target.value);
               setRunLine(value);
 
-              fetch(`http://localhost:8000/pocketnc/set-line?line=${value}`, {
+              fetch(`${API_URL}/pocketnc/set-line?line=${value}`, {
                 method: "POST",
               });
             }}
@@ -403,7 +404,7 @@ export default function PocketNC({
 
             <button
               onClick={() =>
-                fetch("http://localhost:8000/pocketnc/home_all", {
+                fetch(`${API_URL}/pocketnc/home_all`, {
                   method: "POST",
                 })
               }
@@ -757,7 +758,7 @@ function SegmentedRingGauge({ value, max, unit, rings, size }: any) {
 ══════════════════════════════════════════════════════════════ */
 function AxisBox({ label, value, w, h, fontSize }: any) {
   const handleHome = () => {
-    fetch(`http://localhost:8000/pocketnc/home?axis=${label}`, {
+    fetch(`${API_URL}/pocketnc/home?axis=${label}`, {
       method: "POST",
     });
   };
@@ -817,15 +818,15 @@ function Slider({ label, labelW, fontSize }: any) {
           const normalized = newVal / 100;
 
           if (label === "Feed Rate") {
-            fetch(`http://localhost:8000/pocketnc/feed?value=${normalized}`, { method: "POST" });
+            fetch(`${API_URL}/pocketnc/feed?value=${normalized}`, { method: "POST" });
           }
 
           if (label === "Max Velocity") {
-            fetch(`http://localhost:8000/pocketnc/velocity?value=${normalized}`, { method: "POST" });
+            fetch(`${API_URL}/pocketnc/velocity?value=${normalized}`, { method: "POST" });
           }
 
           if (label === "Spindle Rate") {
-            fetch(`http://localhost:8000/pocketnc/spindle?value=${normalized}`, { method: "POST" });
+            fetch(`${API_URL}/pocketnc/spindle?value=${normalized}`, { method: "POST" });
           }
         }}
         className="flex-1 accent-green-500"

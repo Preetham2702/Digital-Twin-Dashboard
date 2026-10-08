@@ -16,6 +16,7 @@ import {
   CartesianGrid,
   ResponsiveContainer
 } from "recharts"
+import { API_URL, WS_URL } from "../config"
 
 // 🟢 PREVIEW: set this to your printer's real bed size [X, Y, Z] in mm
 const BUILD_VOLUME: [number, number, number] = [256, 256, 256]
@@ -146,7 +147,7 @@ export default function FDM({
   // =============================
   const fetchFiles = async () => {
     try {
-      const res = await fetch("http://localhost:8000/files")
+      const res = await fetch(`${API_URL}/files`)
       if (res.ok) {
         const data = await res.json()
 
@@ -183,7 +184,7 @@ export default function FDM({
         }
 
         if (!text) {
-          const res = await fetch(`http://localhost:8000/gcode?file=${cleanFile}`)
+          const res = await fetch(`${API_URL}/gcode?file=${cleanFile}`)
           if (!res.ok) return
 
           text = await res.text()
@@ -285,7 +286,7 @@ export default function FDM({
   // 🟠 BED ALERT: on mount, re-check bed status so a browser refresh doesn't
   // lose an active "print not removed" alert. Runs one live check on the server.
   useEffect(() => {
-    fetch("http://localhost:8000/bed-status")
+    fetch(`${API_URL}/bed-status`)
       .then(r => r.json())
       .then(d => { if (d.success && d.print_present) setBedAlert(true) })
       .catch(() => {})
@@ -293,7 +294,7 @@ export default function FDM({
 
   // 💡 LIGHT: sync the button with the printer's real light state on mount.
   useEffect(() => {
-    fetch("http://localhost:8000/light-status")
+    fetch(`${API_URL}/light-status`)
       .then(r => r.json())
       .then(d => { if (typeof d.on === "boolean") setLightOn(d.on) })
       .catch(() => {})
@@ -308,7 +309,7 @@ useEffect(() => {
   const connect = () => {
     if (!isMounted) return
 
-    const socket = new WebSocket("ws://localhost:8000/ws/printer")
+    const socket = new WebSocket(`${WS_URL}/ws/printer`)
     socketRef.current = socket
 
     socket.onopen = () => {
@@ -528,7 +529,7 @@ useEffect(() => {
 useEffect(() => {
   const checkRunning = async () => {
     try {
-      const res = await fetch("http://localhost:8000/printer/status")
+      const res = await fetch(`${API_URL}/printer/status`)
       if (!res.ok) return
 
       const data = await res.json()
@@ -611,7 +612,7 @@ useEffect(() => {
     const formData = new FormData()
     formData.append("file", file)
 
-    const res = await fetch("http://localhost:8000/upload", {
+    const res = await fetch(`${API_URL}/upload`, {
       method: "POST",
       body: formData,
     })
@@ -633,7 +634,7 @@ useEffect(() => {
     const next = !lightOn
     setLightOn(next)
     try {
-      const res = await fetch(`http://localhost:8000/light?on=${next}`, { method: "POST" })
+      const res = await fetch(`${API_URL}/light?on=${next}`, { method: "POST" })
       if (!res.ok) setLightOn(!next)
     } catch {
       setLightOn(!next)
@@ -663,7 +664,7 @@ useEffect(() => {
 
   // 🔥 The actual API calls — run only after the dialog is confirmed.
   const doStart = async () => {
-    const res = await fetch(`http://localhost:8000/start?filename=${encodeURIComponent(selectedFile)}`, {
+    const res = await fetch(`${API_URL}/start?filename=${encodeURIComponent(selectedFile)}`, {
       method: "POST",
     })
 
@@ -674,7 +675,7 @@ useEffect(() => {
   }
 
   const doPause = async () => {
-    const res = await fetch("http://localhost:8000/pause", {
+    const res = await fetch(`${API_URL}/pause`, {
       method: "POST",
     })
 
@@ -685,7 +686,7 @@ useEffect(() => {
   }
 
   const doStop = async () => {
-    const res = await fetch("http://localhost:8000/stop", {
+    const res = await fetch(`${API_URL}/stop`, {
       method: "POST",
     })
 
