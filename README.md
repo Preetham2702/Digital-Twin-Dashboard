@@ -146,27 +146,6 @@ docker compose up --build
 
 ---
 
-## 📡 Machine Setup (PocketNC)
-
-On the machine:
-
-```bash
-cd ~/machinekit
-source scripts/rip-environment
-python stream.py
-python control.py
-```
-The backend connects via socket/SSH to stream live data.
-
----
-
-## ⚠️ Notes
-
-* Requires network access to machines
-* Update machine IP in `.env`
-* WebSocket endpoints handled via Nginx
-
----
 
 ## 📌 Future Improvements
 
