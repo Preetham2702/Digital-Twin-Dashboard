@@ -106,8 +106,9 @@ http://localhost
 Create a `.env` file inside the backend folder:
 
 ```env
-PRINTER_IP=your_machine_ip
-SSH_HOST=your_machine_ip
+FDM_PRINTER_IP = 
+RESIN_PRINTER_IP= 
+RESIN_CAMERA_URL=
 ```
 
 ⚠️ Do NOT commit `.env` files to GitHub
