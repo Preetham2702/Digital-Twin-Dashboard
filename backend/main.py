@@ -5,7 +5,8 @@ import time
 from fastapi import Request
 from services import perf
 from Printers.FDM_Printer import router as fdm_router
-from Printers.Pocket_NC import router as cnc_router
+# PocketNC disabled for now — re-enable by uncommenting this import and include_router below.
+# from Printers.Pocket_NC import router as cnc_router
 from Printers.resin_Printer import router as resin_router
 app = FastAPI()
 
@@ -42,7 +43,7 @@ def perf_stats():
 
 
 app.include_router(fdm_router)
-app.include_router(cnc_router)
+# app.include_router(cnc_router)  # PocketNC disabled (no polling / socket stream)
 app.include_router(resin_router)
 
 @app.get("/")

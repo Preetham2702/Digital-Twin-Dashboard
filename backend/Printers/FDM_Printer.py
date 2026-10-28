@@ -20,6 +20,12 @@ PRINTER_IP = os.getenv("FDM_PRINTER_IP")
 if not PRINTER_IP:
     raise ValueError("FDM_PRINTER_IP not set in .env file")
 BASE_URL = f"http://{PRINTER_IP}:7125"
+
+# Optional Moonraker API key. Needed when this backend runs on a computer that
+# Moonraker doesn't trust by IP (e.g. the school Ethernet PC → 401 Unauthorized).
+# Get it from a trusted computer:  curl http://<printer-ip>:7125/access/api_key
+MOONRAKER_API_KEY = os.getenv("MOONRAKER_API_KEY", "").strip()
+MOONRAKER_HEADERS = {"X-Api-Key": MOONRAKER_API_KEY} if MOONRAKER_API_KEY else {}
 PRINTER_STREAM_URL = f"http://{PRINTER_IP}:8080/?action=stream"
 
 POLL_INTERVAL = 1
@@ -121,7 +127,7 @@ async def poll_printer():
 
     await asyncio.sleep(5)
 
-    async with timed_client("fdm", timeout=httpx.Timeout(10.0)) as client:
+    async with timed_client("fdm", headers=MOONRAKER_HEADERS, timeout=httpx.Timeout(10.0)) as client:
         while True:
             try:
                 response = await client.get(
@@ -139,7 +145,13 @@ async def poll_printer():
                     }
                 )
 
-                status = response.json()["result"]["status"]
+                data = response.json()
+                if "result" not in data:
+                    # Moonraker answered, but Klipper isn't ready (shutdown / error / restarting)
+                    err = data.get("error", {})
+                    msg = err.get("message", data) if isinstance(err, dict) else err
+                    raise RuntimeError(f"Moonraker error (HTTP {response.status_code}): {msg}")
+                status = data["result"]["status"]
 
                 raw_state = status.get("print_stats", {}).get("state", "idle")
                 ui_state = map_state(raw_state)
@@ -174,9 +186,21 @@ async def poll_printer():
 
                 await broadcast(latest_status)
 
-            except Exception:
+            except Exception as e:
                 moonraker_connected = False
-                print("⚠️ Network glitch")
+                if isinstance(e, httpx.ConnectTimeout):
+                    reason = "NETWORK (no answer from printer — off, wrong IP, or off campus network/VPN)"
+                elif isinstance(e, httpx.TimeoutException):
+                    reason = "TIMEOUT (connected, but printer too slow to reply)"
+                elif isinstance(e, httpx.ConnectError):
+                    reason = "NETWORK (printer unreachable — check power, IP, Wi-Fi/VPN)"
+                elif isinstance(e, RuntimeError) and str(e).startswith("Moonraker error"):
+                    reason = "KLIPPER NOT READY (network is fine)"
+                elif isinstance(e, ValueError):
+                    reason = "BAD RESPONSE (not JSON)"
+                else:
+                    reason = "CODE ERROR (bug in poll loop)"
+                print(f"⚠️ FDM poll failed [{reason}] {type(e).__name__}: {e}")
 
                 await broadcast({
                     **latest_status,
@@ -199,7 +223,7 @@ async def startup_event():
 @router.get("/files")
 async def list_files():
     try:
-        async with timed_client("fdm", timeout=10.0) as client:
+        async with timed_client("fdm", headers=MOONRAKER_HEADERS, timeout=10.0) as client:
             response = await client.get(
                 f"{BASE_URL}/server/files/list",
                 params={"root": "gcodes"}
@@ -242,7 +266,7 @@ async def list_files():
 async def upload_gcode(file: UploadFile = File(...)):
     content = await file.read()
 
-    async with timed_client("fdm", timeout=httpx.Timeout(120.0)) as client:
+    async with timed_client("fdm", headers=MOONRAKER_HEADERS, timeout=httpx.Timeout(120.0)) as client:
         response = await client.post(
             f"{BASE_URL}/server/files/upload",
             files={"file": (file.filename, content)},
@@ -263,7 +287,7 @@ async def upload_gcode(file: UploadFile = File(...)):
 @router.post("/start")
 async def start_print(filename: str):
     try:
-        async with timed_client("fdm", timeout=10.0) as client:
+        async with timed_client("fdm", headers=MOONRAKER_HEADERS, timeout=10.0) as client:
 
             # 🔥 GET CURRENT STATE
             status_res = await client.get(
@@ -296,7 +320,7 @@ async def start_print(filename: str):
 @router.post("/stop")
 async def stop_print():
     try:
-        async with timed_client("fdm", timeout=5.0) as client:
+        async with timed_client("fdm", headers=MOONRAKER_HEADERS, timeout=5.0) as client:
             await client.post(
                 f"{BASE_URL}/printer/print/cancel"
             )
@@ -311,7 +335,7 @@ async def stop_print():
 @router.post("/pause")
 async def pause_print():
     try:
-        async with timed_client("fdm", timeout=5.0) as client:
+        async with timed_client("fdm", headers=MOONRAKER_HEADERS, timeout=5.0) as client:
             await client.post(
                 f"{BASE_URL}/printer/gcode/script",
                 json={"script": "PAUSE"}
@@ -354,7 +378,7 @@ async def get_gcode(file: str):
 
         print("REQUESTING GCODE:", safe_file)
 
-        async with timed_client("fdm", timeout=10.0) as client:
+        async with timed_client("fdm", headers=MOONRAKER_HEADERS, timeout=10.0) as client:
             response = await client.get(
                 f"{BASE_URL}/server/files/gcodes/{safe_file}"
             )
@@ -375,7 +399,7 @@ async def get_gcode(file: str):
 @router.get("/printer/status")
 async def get_print_status():
     try:
-        async with timed_client("fdm", timeout=10.0) as client:
+        async with timed_client("fdm", headers=MOONRAKER_HEADERS, timeout=10.0) as client:
             response = await client.get(
                 f"{BASE_URL}/printer/objects/query",
                 params={
@@ -419,7 +443,7 @@ async def get_print_status():
 async def set_light(on: bool):
     value = 1 if on else 0
     try:
-        async with timed_client("fdm", timeout=5.0) as client:
+        async with timed_client("fdm", headers=MOONRAKER_HEADERS, timeout=5.0) as client:
             await client.post(
                 f"{BASE_URL}/printer/gcode/script",
                 json={"script": f"SET_PIN PIN={LIGHT_PIN} VALUE={value}"}
@@ -434,7 +458,7 @@ async def set_light(on: bool):
 @router.get("/light-status")
 async def light_status():
     try:
-        async with timed_client("fdm", timeout=5.0) as client:
+        async with timed_client("fdm", headers=MOONRAKER_HEADERS, timeout=5.0) as client:
             r = await client.get(
                 f"{BASE_URL}/printer/objects/query",
                 params={f"output_pin {LIGHT_PIN}": ""}

@@ -89,7 +89,15 @@ async def stream_loop():
                 while "\n" in buffer:
                     line, buffer = buffer.split("\n", 1)
 
-                    raw = json.loads(line.strip())
+                    line = line.strip()
+                    if not line:
+                        continue  # keep-alive / blank line
+                    try:
+                        raw = json.loads(line)
+                    except json.JSONDecodeError:
+                        # Show what the Pi actually sent instead of crashing the stream
+                        print(f"⚠️ PocketNC sent non-JSON: {line[:200]!r}")
+                        continue
 
                     data = {
                         "connected": True,

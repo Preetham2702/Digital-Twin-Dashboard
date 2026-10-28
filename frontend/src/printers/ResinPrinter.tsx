@@ -27,13 +27,22 @@ export default function Resin({
   const [previewSrc, setPreviewSrc] = useState("")
   const [cameraOk, setCameraOk] = useState(false)
 
-  // Refresh camera snapshot every second
+  // Camera: one MJPEG push stream from the backend (frames arrive as soon as
+  // they're decoded — no polling delay). The <img> stays mounted; on error we
+  // hide it and re-attach after 3s with a fresh URL.
+  const [streamKey, setStreamKey] = useState(() => Date.now())
   useEffect(() => {
-    const interval = setInterval(() => {
-      setPreviewSrc(`${API_URL}/preview?t=${Date.now()}`)
-    }, 1000)
-    return () => clearInterval(interval)
-  }, [])
+    setPreviewSrc(`${API_URL}/preview/stream?t=${streamKey}`)
+  }, [streamKey])
+  const onCamLoad = () => {
+    if (!cameraOk) console.log("[RESIN VIDEO] ✅ Stream connected")
+    setCameraOk(true)
+  }
+  const onCamError = () => {
+    if (cameraOk) console.log("[RESIN VIDEO] ❌ Stream lost — retrying in 3s")
+    setCameraOk(false)
+    setTimeout(() => setStreamKey(Date.now()), 3000)
+  }
   const [uvledTemp, setUvledTemp] = useState(0)
   const [tankTemp, setTankTemp] = useState(0)
   const [tankTarget, setTankTarget] = useState(0)
@@ -71,13 +80,14 @@ export default function Resin({
           const currentUvledTemp = msg.uvled_temp_c ?? 0
           const currentTankTemp = msg.tank_temp_c ?? 0
 
+          // Backend `progress` is already 0–100 (ticks can overshoot to ~100.01 at
+          // the end), so clamp — don't scale. A finished/idle job is not "running".
+          const pct = Math.min(100, Math.max(0, currentProgress))
+          const st = String(currentStatus).toUpperCase()
+          const active = pct > 0 && pct < 100 && !["IDLE", "FINISHED", "STOPPED", "STOPPING"].includes(st)
           onSummary?.({
-            status: printerUp
-              ? currentProgress > 0
-                ? "running"
-                : "idle"
-              : "offline",
-            progress: currentProgress > 0 ? currentProgress * 100 : null,
+            status: printerUp ? (active ? "running" : "idle") : "offline",
+            progress: active ? pct : null,
             temps: [
               { label: "UV LED", value: currentUvledTemp },
               { label: "Tank", value: currentTankTemp },
@@ -183,8 +193,8 @@ export default function Resin({
           <img
             src={previewSrc}
             className={`w-full h-full object-cover ${cameraOk ? "" : "hidden"}`}
-            onLoad={() => setCameraOk(true)}
-            onError={() => setCameraOk(false)}
+            onLoad={onCamLoad}
+            onError={onCamError}
           />
           {!cameraOk && (
             <div className="absolute inset-0 flex items-center justify-center text-slate-500 text-sm">
