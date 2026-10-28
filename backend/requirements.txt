@@ -6,3 +6,4 @@ websockets
 python-dotenv
 requests
 python-multipart
+websocket-client

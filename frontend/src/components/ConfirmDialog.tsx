@@ -43,7 +43,7 @@ export default function ConfirmDialog({
         onClick={(e) => e.stopPropagation()}
       >
         <h3 className="text-white font-semibold text-base">{title}</h3>
-        {message && <p className="text-slate-400 text-sm mt-2">{message}</p>}
+        {message && <p className="text-slate-400 text-sm mt-2 whitespace-pre-line">{message}</p>}
 
         <div className="flex justify-end gap-3 mt-5">
           <button

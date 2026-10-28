@@ -158,3 +158,8 @@ docker-compose.override.yml
 *.bak
 *.orig
 .cache/
+
+backend/resin_cache/
+backend/resin_vat.json
+backend/resin_reports/
+backend/resin_maintenance.json

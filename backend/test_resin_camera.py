@@ -15,7 +15,12 @@ print(f"[TEST] Printer IP from .env: {IP}")
 # 1) discovery
 s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.settimeout(5)
 s.sendto(b"M99999", (IP, 3000))
-info = json.loads(s.recvfrom(4096)[0])["Data"]
+try:
+    info = json.loads(s.recvfrom(4096)[0])["Data"]
+except (socket.timeout, TimeoutError):
+    print(f"[TEST] ❌ No answer from {IP} — printer still booting, off Wi-Fi, or its IP changed.")
+    print("[TEST]    Check Settings → Network on the printer screen and update RESIN_PRINTER_IP in .env")
+    raise SystemExit(1)
 mid = info["MainboardID"]
 print(f"[TEST] {info.get('MachineName')} | FW {info.get('FirmwareVersion')} | ID {mid}")
 
